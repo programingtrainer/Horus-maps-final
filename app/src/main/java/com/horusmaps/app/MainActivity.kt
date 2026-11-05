@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -28,9 +29,10 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val lifecycleOwner = LocalLifecycleOwner.current
                     val mapView = remember { MapView(this@MainActivity) }
+                    val mapInitializationRequested = remember { mutableStateOf(false) }
 
                     DisposableEffect(lifecycleOwner, mapView) {
-                        mapView.onCreate(null)
+                        mapView.onCreate(savedInstanceState)
 
                         val observer = LifecycleEventObserver { _, event ->
                             when (event) {
@@ -38,7 +40,6 @@ class MainActivity : ComponentActivity() {
                                 Lifecycle.Event.ON_RESUME -> mapView.onResume()
                                 Lifecycle.Event.ON_PAUSE -> mapView.onPause()
                                 Lifecycle.Event.ON_STOP -> mapView.onStop()
-                                Lifecycle.Event.ON_DESTROY -> mapView.onDestroy()
                                 else -> Unit
                             }
                         }
@@ -55,8 +56,9 @@ class MainActivity : ComponentActivity() {
                         factory = { mapView },
                         modifier = Modifier.fillMaxSize(),
                         update = { view ->
-                            view.getMapAsync { map ->
-                                if (map.style == null) {
+                            if (!mapInitializationRequested.value) {
+                                mapInitializationRequested.value = true
+                                view.getMapAsync { map ->
                                     map.setStyle(
                                         Style.Builder().fromUri(
                                             "https://tiles.openfreemap.org/styles/liberty"
