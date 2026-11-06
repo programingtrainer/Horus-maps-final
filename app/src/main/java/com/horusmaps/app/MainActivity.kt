@@ -53,6 +53,77 @@ import org.maplibre.android.MapLibre
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 
+private fun installMapAppearance(style: Style) {
+    // Match the old map's device-language labels.
+    val language = java.util.Locale.getDefault().language.lowercase(java.util.Locale.ROOT)
+    val localizedName = org.maplibre.android.style.expressions.Expression.coalesce(
+        org.maplibre.android.style.expressions.Expression.get("name:$language"),
+        org.maplibre.android.style.expressions.Expression.get("name_$language")
+    )
+
+    style.layers
+        .filterIsInstance<org.maplibre.android.style.layers.SymbolLayer>()
+        .forEach { layer ->
+            val textExpression = runCatching {
+                layer.getTextField().getExpression()?.toString().orEmpty()
+            }.getOrDefault("")
+
+            if (textExpression.contains("name", ignoreCase = true)) {
+                layer.setProperties(
+                    org.maplibre.android.style.layers.PropertyFactory.textField(localizedName)
+                )
+            }
+        }
+
+    // Keep the old map's 3D building appearance without duplicating
+    // an extrusion layer already supplied by the Liberty style.
+    if (style.layers.none { it is org.maplibre.android.style.layers.FillExtrusionLayer }) {
+        val sourceId = when {
+            style.getSource("openmaptiles") != null -> "openmaptiles"
+            style.getSource("openfreemap") != null -> "openfreemap"
+            else -> null
+        }
+
+        if (sourceId != null) {
+            val buildings = org.maplibre.android.style.layers.FillExtrusionLayer(
+                "horus-3d-buildings",
+                sourceId
+            ).apply {
+                sourceLayer = "building"
+                minZoom = 15f
+                setFilter(
+                    org.maplibre.android.style.expressions.Expression.all(
+                        org.maplibre.android.style.expressions.Expression.has("render_height"),
+                        org.maplibre.android.style.expressions.Expression.has("render_min_height")
+                    )
+                )
+                setProperties(
+                    org.maplibre.android.style.layers.PropertyFactory.fillExtrusionColor(
+                        android.graphics.Color.parseColor("#C7D0DA")
+                    ),
+                    org.maplibre.android.style.layers.PropertyFactory.fillExtrusionHeight(
+                        org.maplibre.android.style.expressions.Expression.get("render_height")
+                    ),
+                    org.maplibre.android.style.layers.PropertyFactory.fillExtrusionBase(
+                        org.maplibre.android.style.expressions.Expression.get("render_min_height")
+                    ),
+                    org.maplibre.android.style.layers.PropertyFactory.fillExtrusionOpacity(0.92f)
+                )
+            }
+
+            val firstLabel = style.layers
+                .filterIsInstance<org.maplibre.android.style.layers.SymbolLayer>()
+                .firstOrNull()
+
+            if (firstLabel != null) {
+                style.addLayerBelow(buildings, firstLabel.id)
+            } else {
+                style.addLayer(buildings)
+            }
+        }
+    }
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -88,7 +159,22 @@ class MainActivity : ComponentActivity() {
                                             Style.Builder().fromUri(
                                                 "https://tiles.openfreemap.org/styles/liberty"
                                             )
-                                        )
+                                        ) { style ->
+                                            // The old repository used this same Liberty vector
+                                            // basemap, with localized labels and 3D buildings.
+                                            runCatching { installMapAppearance(style) }
+                                                .onFailure { error ->
+                                                    android.util.Log.e(
+                                                        "HorusMaps",
+                                                        "Map appearance customization failed",
+                                                        error
+                                                    )
+                                                }
+                                            map.cameraPosition =
+                                                org.maplibre.android.camera.CameraPosition.Builder()
+                                                    .zoom(2.0)
+                                                    .build()
+                                        }
                                     }
                                 }
                             }
