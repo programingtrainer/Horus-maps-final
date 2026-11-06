@@ -35,6 +35,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -65,6 +68,9 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.maps.Style
+import org.maplibre.android.location.LocationComponentActivationOptions
+import org.maplibre.android.location.modes.CameraMode
+import org.maplibre.android.location.modes.RenderMode
 
 private fun installMapAppearance(style: Style, configuredLanguage: String, showBuildings3D: Boolean) {
     // Match the old map's device-language labels.
@@ -145,7 +151,39 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
 }
 
 class MainActivity : ComponentActivity() {
+    private fun enableBlueLocationDot(map: org.maplibre.android.maps.MapLibreMap, style: Style) {
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) return
+
+        try {
+            val component = map.locationComponent
+            if (!component.isLocationComponentActivated) {
+                component.activateLocationComponent(
+                    LocationComponentActivationOptions.builder(this, style).build()
+                )
+            }
+            component.isLocationComponentEnabled = true
+            component.cameraMode = CameraMode.NONE
+            component.renderMode = RenderMode.NORMAL
+        } catch (error: Exception) {
+            android.util.Log.e("HorusMaps", "Unable to enable blue location indicator", error)
+        }
+    }
+
     private fun centerOnCurrentLocation(map: org.maplibre.android.maps.MapLibreMap) {
+        val componentLocation = runCatching {
+            if (map.locationComponent.isLocationComponentActivated) map.locationComponent.lastKnownLocation else null
+        }.getOrNull()
+        if (componentLocation != null) {
+            map.animateCamera(
+                CameraUpdateFactory.newLatLngZoom(
+                    LatLng(componentLocation.latitude, componentLocation.longitude), 16.0
+                ), 900
+            )
+            return
+        }
+
         val manager = getSystemService(LOCATION_SERVICE) as LocationManager
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -186,7 +224,10 @@ class MainActivity : ComponentActivity() {
                 var showWelcomeSheet by remember { mutableStateOf(remoteConfig.showWelcomePanel) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                     val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-                    if (granted) mapLibreMap?.let { centerOnCurrentLocation(it) }
+                    if (granted) mapLibreMap?.getStyle { style ->
+                        enableBlueLocationDot(mapLibreMap!!, style)
+                        centerOnCurrentLocation(mapLibreMap!!)
+                    }
                     else Toast.makeText(this@MainActivity, "يلزم السماح بإذن الموقع لتحديد موقعك الحالي.", Toast.LENGTH_LONG).show()
                 }
                 fun requestOrLocate() {
@@ -258,7 +299,10 @@ class MainActivity : ComponentActivity() {
                                                     .build()
                                             val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                                             val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                                            if (remoteConfig.currentLocation && (fine || coarse)) centerOnCurrentLocation(map)
+                                            if (remoteConfig.currentLocation && (fine || coarse)) {
+                                                enableBlueLocationDot(map, style)
+                                                centerOnCurrentLocation(map)
+                                            }
                                         }
                                     }
                                 }
@@ -267,11 +311,25 @@ class MainActivity : ComponentActivity() {
 
                         if (remoteConfig.currentLocation) {
                             Surface(
-                                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 14.dp, end = 16.dp),
-                                shape = RoundedCornerShape(18.dp), color = Color.White, shadowElevation = 8.dp
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .navigationBarsPadding()
+                                    .padding(end = 18.dp, bottom = 28.dp)
+                                    .size(54.dp),
+                                shape = androidx.compose.foundation.shape.CircleShape,
+                                color = Color.White,
+                                shadowElevation = 7.dp
                             ) {
-                                androidx.compose.material3.TextButton(onClick = { requestOrLocate() }, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
-                                    Text("◎  موقعي الحالي", color = Color(0xFF087FE5), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                androidx.compose.material3.IconButton(
+                                    onClick = { requestOrLocate() },
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.MyLocation,
+                                        contentDescription = "تحديد موقعي الحالي",
+                                        tint = Color(0xFF287FE8),
+                                        modifier = Modifier.size(25.dp)
+                                    )
                                 }
                             }
                         }
