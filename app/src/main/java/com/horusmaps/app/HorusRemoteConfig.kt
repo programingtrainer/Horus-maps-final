@@ -67,7 +67,7 @@ data class HorusRemoteConfig(
             val ui = config.optJSONObject("ui") ?: JSONObject()
             val refresh = config.optJSONObject("refresh") ?: JSONObject()
 
-            if (app.optString("name", "HorusMaps") != "HorusMaps") return null
+            if (app.optString("name", "HorusMaps") != "HorusMaps") throw IllegalArgumentException("Unexpected app configuration")
             HorusRemoteConfig(
                 styleUrl = map.optString(
                     "styleUrl",
