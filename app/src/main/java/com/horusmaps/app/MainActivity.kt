@@ -204,8 +204,10 @@ class MainActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(remoteConfig.refreshIntervalSeconds) {
-                    delay(remoteConfig.refreshIntervalSeconds * 1000L)
-                    HorusRemoteConfig.refresh(this@MainActivity) { updated -> remoteConfig = updated }
+                    while (true) {
+                        delay(remoteConfig.refreshIntervalSeconds * 1000L)
+                        HorusRemoteConfig.refresh(this@MainActivity) { updated -> remoteConfig = updated }
+                    }
                 }
 
                 LaunchedEffect(remoteConfig) {
