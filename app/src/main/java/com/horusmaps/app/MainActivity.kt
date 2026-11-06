@@ -66,9 +66,9 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.maps.Style
 
-private fun installMapAppearance(style: Style) {
+private fun installMapAppearance(style: Style, configuredLanguage: String, showBuildings3D: Boolean) {
     // Match the old map's device-language labels.
-    val language = java.util.Locale.getDefault().language.lowercase(java.util.Locale.ROOT)
+    val language = if (configuredLanguage == "device") java.util.Locale.getDefault().language.lowercase(java.util.Locale.ROOT) else configuredLanguage.lowercase(java.util.Locale.ROOT)
     val localizedName = org.maplibre.android.style.expressions.Expression.coalesce(
         org.maplibre.android.style.expressions.Expression.get("name:$language"),
         org.maplibre.android.style.expressions.Expression.get("name_$language")
@@ -90,7 +90,7 @@ private fun installMapAppearance(style: Style) {
 
     // Keep the old map's 3D building appearance without duplicating
     // an extrusion layer already supplied by the Liberty style.
-    if (style.layers.none { it is org.maplibre.android.style.layers.FillExtrusionLayer }) {
+    if (showBuildings3D && style.layers.none { it is org.maplibre.android.style.layers.FillExtrusionLayer }) {
         val sourceId = when {
             style.getSource("openmaptiles") != null -> "openmaptiles"
             style.getSource("openfreemap") != null -> "openfreemap"
@@ -175,19 +175,35 @@ class MainActivity : ComponentActivity() {
                 val mapView = remember { MapView(this@MainActivity) }
                 val mapInitializationRequested = remember { mutableStateOf(false) }
                 var mapLibreMap by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
-                var showWelcomeSheet by remember { mutableStateOf(false) }
+                var remoteConfig by remember { mutableStateOf(HorusRemoteConfig.loadCached(this@MainActivity)) }
+                var showWelcomeSheet by remember { mutableStateOf(remoteConfig.showWelcomePanel) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                     val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
                     if (granted) mapLibreMap?.let { centerOnCurrentLocation(it) }
                     else Toast.makeText(this@MainActivity, "يلزم السماح بإذن الموقع لتحديد موقعك الحالي.", Toast.LENGTH_LONG).show()
                 }
                 fun requestOrLocate() {
+                    if (!remoteConfig.currentLocation) return
                     val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                     val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
                     if (fine || coarse) mapLibreMap?.let { centerOnCurrentLocation(it) }
                     else locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                 }
-                LaunchedEffect(Unit) { requestOrLocate() }
+                LaunchedEffect(Unit) {
+                    requestOrLocate()
+                    HorusRemoteConfig.refresh(this@MainActivity) { updated -> remoteConfig = updated }
+                }
+
+                LaunchedEffect(remoteConfig) {
+                    showWelcomeSheet = remoteConfig.showWelcomePanel
+                    val map = mapLibreMap
+                    if (map != null) {
+                        map.setStyle(Style.Builder().fromUri(remoteConfig.styleUrl)) { style ->
+                            runCatching { installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D) }
+                            map.animateCamera(CameraUpdateFactory.zoomTo(remoteConfig.initialZoom), 500)
+                        }
+                    }
+                }
 
                 LaunchedEffect(Unit) {
                     delay(450)
@@ -214,7 +230,7 @@ class MainActivity : ComponentActivity() {
                                         ) { style ->
                                             // The old repository used this same Liberty vector
                                             // basemap, with localized labels and 3D buildings.
-                                            runCatching { installMapAppearance(style) }
+                                            runCatching { installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D) }
                                                 .onFailure { error ->
                                                     android.util.Log.e(
                                                         "HorusMaps",
@@ -224,11 +240,11 @@ class MainActivity : ComponentActivity() {
                                                 }
                                             map.cameraPosition =
                                                 org.maplibre.android.camera.CameraPosition.Builder()
-                                                    .zoom(2.0)
+                                                    .zoom(remoteConfig.initialZoom)
                                                     .build()
                                             val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                                             val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                                            if (fine || coarse) centerOnCurrentLocation(map)
+                                            if (remoteConfig.currentLocation && (fine || coarse)) centerOnCurrentLocation(map)
                                         }
                                     }
                                 }
