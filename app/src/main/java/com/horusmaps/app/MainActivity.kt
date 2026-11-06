@@ -207,7 +207,7 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(Unit) {
                     delay(450)
-                    showWelcomeSheet = true
+                    showWelcomeSheet = remoteConfig.showWelcomePanel
                 }
 
                 Surface(
