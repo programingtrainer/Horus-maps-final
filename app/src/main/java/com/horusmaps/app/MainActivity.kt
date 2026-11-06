@@ -1,8 +1,17 @@
 package com.horusmaps.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -21,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -43,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
@@ -51,6 +62,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
 import org.maplibre.android.maps.MapView
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.maps.Style
 
 private fun installMapAppearance(style: Style) {
@@ -125,6 +138,31 @@ private fun installMapAppearance(style: Style) {
 }
 
 class MainActivity : ComponentActivity() {
+    private fun centerOnCurrentLocation(map: org.maplibre.android.maps.MapLibreMap) {
+        val manager = getSystemService(LOCATION_SERVICE) as LocationManager
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) return
+        fun move(location: Location) {
+            val target = LatLng(location.latitude, location.longitude)
+            runOnUiThread { map.animateCamera(CameraUpdateFactory.newLatLngZoom(target, 15.5), 900) }
+        }
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).filter { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+        val last = providers.mapNotNull { runCatching { manager.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time }
+        if (last != null) move(last)
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) { move(location); runCatching { manager.removeUpdates(this) } }
+        }
+        try {
+            providers.forEach { manager.requestLocationUpdates(it, 0L, 0f, listener, Looper.getMainLooper()) }
+            Handler(Looper.getMainLooper()).postDelayed({ runCatching { manager.removeUpdates(listener) } }, 15000L)
+        } catch (_: SecurityException) {
+            Toast.makeText(this, "لم يتم منح إذن الموقع", Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+            if (last == null) Toast.makeText(this, "تعذر تحديد موقعك. تأكد من تشغيل خدمة الموقع.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
@@ -136,7 +174,20 @@ class MainActivity : ComponentActivity() {
                 val lifecycleOwner = LocalLifecycleOwner.current
                 val mapView = remember { MapView(this@MainActivity) }
                 val mapInitializationRequested = remember { mutableStateOf(false) }
+                var mapLibreMap by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
                 var showWelcomeSheet by remember { mutableStateOf(false) }
+                val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+                    val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+                    if (granted) mapLibreMap?.let { centerOnCurrentLocation(it) }
+                    else Toast.makeText(this@MainActivity, "يلزم السماح بإذن الموقع لتحديد موقعك الحالي.", Toast.LENGTH_LONG).show()
+                }
+                fun requestOrLocate() {
+                    val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    if (fine || coarse) mapLibreMap?.let { centerOnCurrentLocation(it) }
+                    else locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                }
+                LaunchedEffect(Unit) { requestOrLocate() }
 
                 LaunchedEffect(Unit) {
                     delay(450)
@@ -155,6 +206,7 @@ class MainActivity : ComponentActivity() {
                                 if (!mapInitializationRequested.value) {
                                     mapInitializationRequested.value = true
                                     view.getMapAsync { map ->
+                                        mapLibreMap = map
                                         map.setStyle(
                                             Style.Builder().fromUri(
                                                 "https://tiles.openfreemap.org/styles/liberty"
@@ -174,12 +226,23 @@ class MainActivity : ComponentActivity() {
                                                 org.maplibre.android.camera.CameraPosition.Builder()
                                                     .zoom(2.0)
                                                     .build()
+                                            val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                            val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                            if (fine || coarse) centerOnCurrentLocation(map)
                                         }
                                     }
                                 }
                             }
                         )
 
+                        Surface(
+                            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 14.dp, end = 16.dp),
+                            shape = RoundedCornerShape(18.dp), color = Color.White, shadowElevation = 8.dp
+                        ) {
+                            androidx.compose.material3.TextButton(onClick = { requestOrLocate() }, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
+                                Text("◎  موقعي الحالي", color = Color(0xFF087FE5), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
+                        }
                         AnimatedVisibility(
                             visible = showWelcomeSheet,
                             modifier = Modifier
