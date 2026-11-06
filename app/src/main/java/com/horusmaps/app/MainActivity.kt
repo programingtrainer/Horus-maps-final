@@ -88,6 +88,13 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
             }
         }
 
+    // Let the remote setting explicitly enable or disable 3D building layers.
+    if (!showBuildings3D) {
+        style.layers
+            .filterIsInstance<org.maplibre.android.style.layers.FillExtrusionLayer>()
+            .forEach { style.removeLayer(it) }
+    }
+
     // Keep the old map's 3D building appearance without duplicating
     // an extrusion layer already supplied by the Liberty style.
     if (showBuildings3D && style.layers.none { it is org.maplibre.android.style.layers.FillExtrusionLayer }) {
@@ -256,12 +263,14 @@ class MainActivity : ComponentActivity() {
                             }
                         )
 
-                        Surface(
-                            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 14.dp, end = 16.dp),
-                            shape = RoundedCornerShape(18.dp), color = Color.White, shadowElevation = 8.dp
-                        ) {
-                            androidx.compose.material3.TextButton(onClick = { requestOrLocate() }, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
-                                Text("◎  موقعي الحالي", color = Color(0xFF087FE5), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        if (remoteConfig.currentLocation) {
+                            Surface(
+                                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 14.dp, end = 16.dp),
+                                shape = RoundedCornerShape(18.dp), color = Color.White, shadowElevation = 8.dp
+                            ) {
+                                androidx.compose.material3.TextButton(onClick = { requestOrLocate() }, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
+                                    Text("◎  موقعي الحالي", color = Color(0xFF087FE5), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                }
                             }
                         }
                         AnimatedVisibility(
