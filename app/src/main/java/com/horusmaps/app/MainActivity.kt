@@ -224,7 +224,10 @@ class MainActivity : ComponentActivity() {
                 var showWelcomeSheet by remember { mutableStateOf(remoteConfig.showWelcomePanel) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                     val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-                    if (granted) mapLibreMap?.let { centerOnCurrentLocation(it) }
+                    if (granted) mapLibreMap?.getStyle { style ->
+                        enableBlueLocationDot(mapLibreMap!!, style)
+                        centerOnCurrentLocation(mapLibreMap!!)
+                    }
                     else Toast.makeText(this@MainActivity, "يلزم السماح بإذن الموقع لتحديد موقعك الحالي.", Toast.LENGTH_LONG).show()
                 }
                 fun requestOrLocate() {
