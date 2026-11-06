@@ -190,7 +190,14 @@ class MainActivity : ComponentActivity() {
                     else locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                 }
                 LaunchedEffect(Unit) {
-                    requestOrLocate()
+                    HorusRemoteConfig.refresh(this@MainActivity) { updated ->
+                        remoteConfig = updated
+                        if (updated.currentLocation) requestOrLocate()
+                    }
+                }
+
+                LaunchedEffect(remoteConfig.refreshIntervalSeconds) {
+                    delay(remoteConfig.refreshIntervalSeconds * 1000L)
                     HorusRemoteConfig.refresh(this@MainActivity) { updated -> remoteConfig = updated }
                 }
 
@@ -224,9 +231,7 @@ class MainActivity : ComponentActivity() {
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
                                         map.setStyle(
-                                            Style.Builder().fromUri(
-                                                "https://tiles.openfreemap.org/styles/liberty"
-                                            )
+                                            Style.Builder().fromUri(remoteConfig.styleUrl)
                                         ) { style ->
                                             // The old repository used this same Liberty vector
                                             // basemap, with localized labels and 3D buildings.
