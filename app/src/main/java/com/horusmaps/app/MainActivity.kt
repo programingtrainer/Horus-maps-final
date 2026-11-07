@@ -94,6 +94,115 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
             }
         }
 
+    // Fade political detail in as the camera zooms toward countries.
+    // The Liberty style already provides these stable layer IDs.
+    val countryDetailOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
+        org.maplibre.android.style.expressions.Expression.linear(),
+        org.maplibre.android.style.expressions.Expression.zoom(),
+        org.maplibre.android.style.expressions.Expression.stop(1.35, 0.0),
+        org.maplibre.android.style.expressions.Expression.stop(2.35, 0.45),
+        org.maplibre.android.style.expressions.Expression.stop(3.35, 1.0)
+    )
+    style.getLayer("boundary_2")?.setProperties(
+        org.maplibre.android.style.layers.PropertyFactory.lineOpacity(countryDetailOpacity)
+    )
+    listOf("label_country_1", "label_country_2", "label_country_3").forEach { id ->
+        (style.getLayer(id) as? org.maplibre.android.style.layers.SymbolLayer)?.setProperties(
+            org.maplibre.android.style.layers.PropertyFactory.textOpacity(countryDetailOpacity)
+        )
+    }
+
+    // Use a dedicated, dissolved continent-boundary dataset rather than
+    // tracing the world coastline or reusing national borders.
+    runCatching {
+        val continentOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
+            org.maplibre.android.style.expressions.Expression.linear(),
+            org.maplibre.android.style.expressions.Expression.zoom(),
+            org.maplibre.android.style.expressions.Expression.stop(0.0, 0.95),
+            org.maplibre.android.style.expressions.Expression.stop(1.5, 0.95),
+            org.maplibre.android.style.expressions.Expression.stop(2.6, 0.45),
+            org.maplibre.android.style.expressions.Expression.stop(3.35, 0.0)
+        )
+
+        if (style.getSource("horus-continent-boundaries") == null) {
+            val continentGeoJsonUrl =
+                "https://services.arcgis.com/8veDRDlhXWywYP3S/ArcGIS/rest/services/Change_in_water_storage_WFL1/FeatureServer/0/query?where=1=1&outFields=CONTINENT&returnGeometry=true&outSR=4326&f=geojson"
+            style.addSource(
+                org.maplibre.android.style.sources.GeoJsonSource(
+                    "horus-continent-boundaries",
+                    continentGeoJsonUrl
+                )
+            )
+        }
+
+        if (style.getLayer("horus-continent-outline") == null) {
+            val continentOutline = org.maplibre.android.style.layers.LineLayer(
+                "horus-continent-outline",
+                "horus-continent-boundaries"
+            ).apply {
+                minZoom = 0.0f
+                maxZoom = 3.36f
+                setProperties(
+                    org.maplibre.android.style.layers.PropertyFactory.lineColor("#71869D"),
+                    org.maplibre.android.style.layers.PropertyFactory.lineWidth(1.35f),
+                    org.maplibre.android.style.layers.PropertyFactory.lineOpacity(continentOpacity)
+                )
+            }
+            style.addLayer(continentOutline)
+        }
+
+        if (style.getSource("horus-continent-labels") == null) {
+            val labelsJson = """{"type":"FeatureCollection","features":[
+                {"type":"Feature","properties":{"name_ar":"أمريكا الشمالية","name_en":"NORTH AMERICA"},"geometry":{"type":"Point","coordinates":[-102,43]}},
+                {"type":"Feature","properties":{"name_ar":"أمريكا الجنوبية","name_en":"SOUTH AMERICA"},"geometry":{"type":"Point","coordinates":[-61,-17]}},
+                {"type":"Feature","properties":{"name_ar":"أوروبا","name_en":"EUROPE"},"geometry":{"type":"Point","coordinates":[17,53]}},
+                {"type":"Feature","properties":{"name_ar":"أفريقيا","name_en":"AFRICA"},"geometry":{"type":"Point","coordinates":[20,2]}},
+                {"type":"Feature","properties":{"name_ar":"آسيا","name_en":"ASIA"},"geometry":{"type":"Point","coordinates":[91,47]}},
+                {"type":"Feature","properties":{"name_ar":"أوقيانوسيا","name_en":"OCEANIA"},"geometry":{"type":"Point","coordinates":[135,-24]}},
+                {"type":"Feature","properties":{"name_ar":"القارة القطبية الجنوبية","name_en":"ANTARCTICA"},"geometry":{"type":"Point","coordinates":[0,-78]}}
+            ]}"""
+            style.addSource(
+                org.maplibre.android.style.sources.GeoJsonSource(
+                    "horus-continent-labels",
+                    labelsJson
+                )
+            )
+        }
+
+        if (style.getLayer("horus-continent-labels-layer") == null) {
+            val useArabic = (if (configuredLanguage == "device") {
+                java.util.Locale.getDefault().language
+            } else {
+                configuredLanguage
+            }).startsWith("ar", ignoreCase = true)
+            val continentText = if (useArabic) {
+                org.maplibre.android.style.expressions.Expression.get("name_ar")
+            } else {
+                org.maplibre.android.style.expressions.Expression.get("name_en")
+            }
+            val continentLabels = org.maplibre.android.style.layers.SymbolLayer(
+                "horus-continent-labels-layer",
+                "horus-continent-labels"
+            ).apply {
+                minZoom = 0.0f
+                maxZoom = 3.36f
+                setProperties(
+                    org.maplibre.android.style.layers.PropertyFactory.textField(continentText),
+                    org.maplibre.android.style.layers.PropertyFactory.textSize(12.5f),
+                    org.maplibre.android.style.layers.PropertyFactory.textColor("#34485F"),
+                    org.maplibre.android.style.layers.PropertyFactory.textHaloColor("#FFFFFF"),
+                    org.maplibre.android.style.layers.PropertyFactory.textHaloWidth(1.8f),
+                    org.maplibre.android.style.layers.PropertyFactory.textAllowOverlap(true),
+                    org.maplibre.android.style.layers.PropertyFactory.textIgnorePlacement(true),
+                    org.maplibre.android.style.layers.PropertyFactory.textOpacity(continentOpacity)
+                )
+            }
+            style.addLayer(continentLabels)
+        }
+    }.onFailure { error ->
+        android.util.Log.e("HorusMaps", "Unable to install continent overview", error)
+    }
+
     // Let the remote setting explicitly enable or disable 3D building layers.
     if (!showBuildings3D) {
         style.layers
