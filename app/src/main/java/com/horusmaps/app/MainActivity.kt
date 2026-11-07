@@ -1,6 +1,7 @@
 package com.horusmaps.app
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
@@ -68,11 +69,53 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
 
-private fun installMapAppearance(style: Style, configuredLanguage: String, showBuildings3D: Boolean) {
+private fun installMapAppearance(context: Context, style: Style, configuredLanguage: String, showBuildings3D: Boolean) {
+    // Replace dense political details at world scale with a clean land outline and continent labels.
+    runCatching {
+        style.getLayer("label_country_1")?.maxZoom = 1.8f
+        style.getLayer("label_country_2")?.maxZoom = 1.8f
+        (style.getLayer("boundary_2") as? LineLayer)?.minZoom = 1.6f
+        if (style.getSource("horus-continent-land") == null) {
+            val landGeoJson = context.assets.open("continents_land.geojson").bufferedReader().use { it.readText() }
+            style.addSource(GeoJsonSource("horus-continent-land", landGeoJson))
+            val outline = LineLayer("horus-continent-outline", "horus-continent-land").apply {
+                minZoom = 0.0f
+                maxZoom = 2.35f
+                setProperties(PropertyFactory.lineColor("#8194A9"), PropertyFactory.lineWidth(1.15f), PropertyFactory.lineOpacity(0.82f))
+            }
+            val firstLabel = style.layers.firstOrNull { it is SymbolLayer }
+            if (firstLabel != null) style.addLayerBelow(outline, firstLabel.id) else style.addLayer(outline)
+        }
+        if (style.getSource("horus-continent-labels") == null) {
+            val labelsJson = """{"type":"FeatureCollection","features":[
+                {"type":"Feature","properties":{"name_ar":"أمريكا الشمالية","name_en":"NORTH AMERICA"},"geometry":{"type":"Point","coordinates":[-102,43]}},
+                {"type":"Feature","properties":{"name_ar":"أمريكا الجنوبية","name_en":"SOUTH AMERICA"},"geometry":{"type":"Point","coordinates":[-61,-17]}},
+                {"type":"Feature","properties":{"name_ar":"أوروبا","name_en":"EUROPE"},"geometry":{"type":"Point","coordinates":[17,53]}},
+                {"type":"Feature","properties":{"name_ar":"أفريقيا","name_en":"AFRICA"},"geometry":{"type":"Point","coordinates":[20,2]}},
+                {"type":"Feature","properties":{"name_ar":"آسيا","name_en":"ASIA"},"geometry":{"type":"Point","coordinates":[91,47]}},
+                {"type":"Feature","properties":{"name_ar":"أوقيانوسيا","name_en":"OCEANIA"},"geometry":{"type":"Point","coordinates":[135,-24]}},
+                {"type":"Feature","properties":{"name_ar":"القارة القطبية الجنوبية","name_en":"ANTARCTICA"},"geometry":{"type":"Point","coordinates":[0,-78]}}
+            ]}"""
+            style.addSource(GeoJsonSource("horus-continent-labels", labelsJson))
+            val useArabic = (if (configuredLanguage == "device") java.util.Locale.getDefault().language else configuredLanguage).startsWith("ar", ignoreCase = true)
+            val text = if (useArabic) Expression.get("name_ar") else Expression.get("name_en")
+            val continentLabels = SymbolLayer("horus-continent-labels-layer", "horus-continent-labels").apply {
+                minZoom = 0.0f
+                maxZoom = 2.35f
+                setProperties(PropertyFactory.textField(text), PropertyFactory.textSize(13f), PropertyFactory.textColor("#34465C"), PropertyFactory.textHaloColor("#FFFFFF"), PropertyFactory.textHaloWidth(1.6f), PropertyFactory.textAllowOverlap(true), PropertyFactory.textIgnorePlacement(true))
+            }
+            style.addLayer(continentLabels)
+        }
+    }.onFailure { android.util.Log.e("HorusMaps", "Unable to install continent overview layers", it) }
     // Match the old map's device-language labels.
     val language = if (configuredLanguage == "device") java.util.Locale.getDefault().language.lowercase(java.util.Locale.ROOT) else configuredLanguage.lowercase(java.util.Locale.ROOT)
     val localizedName = org.maplibre.android.style.expressions.Expression.coalesce(
@@ -283,7 +326,7 @@ class MainActivity : ComponentActivity() {
                     if (map != null) {
                         map.setStyle(Style.Builder().fromUri(remoteConfig.styleUrl)) { style ->
                             runCatching {
-                                installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D)
+                                installMapAppearance(this@MainActivity, style, remoteConfig.language, remoteConfig.showBuildings3D)
                                 applyMapDimension(map, style, isMap3D)
                             }
                             map.animateCamera(CameraUpdateFactory.zoomTo(remoteConfig.initialZoom), 500)
@@ -310,14 +353,16 @@ class MainActivity : ComponentActivity() {
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
                                         // Allow the full-world zoom range so Liberty can show its continent labels.
-                                        map.setMinZoomPreference(0.0)
+                                        val mapWidthPx = view.width.toDouble().takeIf { it > 0.0 } ?: resources.displayMetrics.widthPixels.toDouble()
+                                        val oneWorldMinZoom = (kotlin.math.ln(mapWidthPx / 512.0) / kotlin.math.ln(2.0) + 0.08).coerceIn(0.0, 2.0)
+                                        map.setMinZoomPreference(oneWorldMinZoom)
                                         map.setStyle(
                                             Style.Builder().fromUri(remoteConfig.styleUrl)
                                         ) { style ->
                                             // The old repository used this same Liberty vector
                                             // basemap, with localized labels and 3D buildings.
                                             runCatching {
-                                                installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D)
+                                                installMapAppearance(this@MainActivity, style, remoteConfig.language, remoteConfig.showBuildings3D)
                                                 applyMapDimension(map, style, isMap3D)
                                             }
                                                 .onFailure { error ->
