@@ -5,3 +5,8 @@ compatibility_date = "2026-11-06"
 [[kv_namespaces]]
 binding = "HORUS_MAPS_CONFIG"
 id = "7be96ca0a9c3487fa6b0702a964caf7c"
+
+[[d1_databases]]
+binding = "HORUS_USERS"
+database_name = "db1"
+database_id = "b346085d-cde1-435d-87c5-0bfee2a20898"
