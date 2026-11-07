@@ -98,7 +98,13 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
     if (!showBuildings3D) {
         style.layers
             .filterIsInstance<org.maplibre.android.style.layers.FillExtrusionLayer>()
-            .forEach { style.removeLayer(it) }
+            .forEach {
+                it.setProperties(
+                    org.maplibre.android.style.layers.PropertyFactory.visibility(
+                        org.maplibre.android.style.layers.Property.NONE
+                    )
+                )
+            }
     }
 
     // Keep the old map's 3D building appearance without duplicating
@@ -148,6 +154,36 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
             }
         }
     }
+}
+
+private fun applyMapDimension(
+    map: org.maplibre.android.maps.MapLibreMap,
+    style: Style,
+    is3D: Boolean
+) {
+    val visibility = if (is3D) {
+        org.maplibre.android.style.layers.Property.VISIBLE
+    } else {
+        org.maplibre.android.style.layers.Property.NONE
+    }
+
+    style.layers
+        .filterIsInstance<org.maplibre.android.style.layers.FillExtrusionLayer>()
+        .forEach { layer ->
+            layer.setProperties(
+                org.maplibre.android.style.layers.PropertyFactory.visibility(visibility)
+            )
+        }
+
+    val current = map.cameraPosition
+    val target = org.maplibre.android.camera.CameraPosition.Builder()
+        .target(current.target)
+        .zoom(current.zoom)
+        .bearing(current.bearing)
+        .tilt(if (is3D) 55.0 else 0.0)
+        .build()
+
+    map.animateCamera(CameraUpdateFactory.newCameraPosition(target), 550)
 }
 
 class MainActivity : ComponentActivity() {
@@ -220,6 +256,7 @@ class MainActivity : ComponentActivity() {
                 val mapView = remember { MapView(this@MainActivity) }
                 val mapInitializationRequested = remember { mutableStateOf(false) }
                 var mapLibreMap by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
+                var isMap3D by remember { mutableStateOf(false) }
                 var remoteConfig by remember { mutableStateOf(HorusRemoteConfig.loadCached(this@MainActivity)) }
                 var showWelcomeSheet by remember { mutableStateOf(remoteConfig.showWelcomePanel) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -256,7 +293,10 @@ class MainActivity : ComponentActivity() {
                     val map = mapLibreMap
                     if (map != null) {
                         map.setStyle(Style.Builder().fromUri(remoteConfig.styleUrl)) { style ->
-                            runCatching { installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D) }
+                            runCatching {
+                                installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D)
+                                applyMapDimension(map, style, isMap3D)
+                            }
                             map.animateCamera(CameraUpdateFactory.zoomTo(remoteConfig.initialZoom), 500)
                         }
                     }
@@ -285,7 +325,10 @@ class MainActivity : ComponentActivity() {
                                         ) { style ->
                                             // The old repository used this same Liberty vector
                                             // basemap, with localized labels and 3D buildings.
-                                            runCatching { installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D) }
+                                            runCatching {
+                                                installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D)
+                                                applyMapDimension(map, style, isMap3D)
+                                            }
                                                 .onFailure { error ->
                                                     android.util.Log.e(
                                                         "HorusMaps",
@@ -309,27 +352,57 @@ class MainActivity : ComponentActivity() {
                             }
                         )
 
-                        if (remoteConfig.currentLocation) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .navigationBarsPadding()
+                                .padding(end = 18.dp, bottom = 28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
                             Surface(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .navigationBarsPadding()
-                                    .padding(end = 18.dp, bottom = 28.dp)
-                                    .size(54.dp),
+                                modifier = Modifier.size(54.dp),
                                 shape = androidx.compose.foundation.shape.CircleShape,
                                 color = Color.White,
                                 shadowElevation = 7.dp
                             ) {
-                                androidx.compose.material3.IconButton(
-                                    onClick = { requestOrLocate() },
-                                    modifier = Modifier.fillMaxSize()
+                                androidx.compose.material3.TextButton(
+                                    onClick = {
+                                        isMap3D = !isMap3D
+                                        mapLibreMap?.getStyle { style ->
+                                            applyMapDimension(mapLibreMap!!, style, isMap3D)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.MyLocation,
-                                        contentDescription = "تحديد موقعي الحالي",
-                                        tint = Color(0xFF287FE8),
-                                        modifier = Modifier.size(25.dp)
+                                    Text(
+                                        text = if (isMap3D) "2D" else "3D",
+                                        color = Color(0xFF287FE8),
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
+                                }
+                            }
+
+                            if (remoteConfig.currentLocation) {
+                                Surface(
+                                    modifier = Modifier.size(54.dp),
+                                    shape = androidx.compose.foundation.shape.CircleShape,
+                                    color = Color.White,
+                                    shadowElevation = 7.dp
+                                ) {
+                                    androidx.compose.material3.IconButton(
+                                        onClick = { requestOrLocate() },
+                                        modifier = Modifier.fillMaxSize()
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.MyLocation,
+                                            contentDescription = "تحديد موقعي الحالي",
+                                            tint = Color(0xFF287FE8),
+                                            modifier = Modifier.size(25.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
