@@ -363,6 +363,7 @@ class MainActivity : ComponentActivity() {
                 var mapLibreMap by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
                 var remoteConfig by remember { mutableStateOf(HorusRemoteConfig.loadCached(this@MainActivity)) }
                 var showWelcomeSheet by remember { mutableStateOf(remoteConfig.showWelcomePanel) }
+                var showRegistration by remember { mutableStateOf(false) }
                 var is3DMode by remember { mutableStateOf(remoteConfig.showBuildings3D && remoteConfig.initialZoom >= 14.0) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                     val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
@@ -557,11 +558,8 @@ class MainActivity : ComponentActivity() {
                         ) {
                             WelcomeBottomSheet(
                                 onCreateAccount = {
-                                    Toast.makeText(
-                                        this@MainActivity,
-                                        "إنشاء الحساب سيتم تفعيله في مرحلة المصادقة",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    showWelcomeSheet = false
+                                    showRegistration = true
                                 },
                                 onSignIn = {
                                     Toast.makeText(
@@ -572,6 +570,39 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onContinueAsGuest = {
                                     showWelcomeSheet = false
+                                }
+                            )
+                        }
+
+                        AnimatedVisibility(
+                            visible = showRegistration,
+                            modifier = Modifier.fillMaxSize(),
+                            enter = slideInVertically(
+                                animationSpec = tween(520, easing = FastOutSlowInEasing),
+                                initialOffsetY = { it / 3 }
+                            ) + fadeIn(tween(420)),
+                            exit = slideOutVertically(
+                                animationSpec = tween(420, easing = FastOutSlowInEasing),
+                                targetOffsetY = { it / 3 }
+                            ) + fadeOut(tween(300))
+                        ) {
+                            HorusRegistrationFlow(
+                                onBack = {
+                                    showRegistration = false
+                                    showWelcomeSheet = true
+                                },
+                                onAccountCreated = { email ->
+                                    getSharedPreferences("horus_account", MODE_PRIVATE)
+                                        .edit()
+                                        .putString("email", email)
+                                        .apply()
+                                    showRegistration = false
+                                    showWelcomeSheet = false
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "تم إنشاء حسابك: $email",
+                                        Toast.LENGTH_LONG
+                                    ).show()
                                 }
                             )
                         }
