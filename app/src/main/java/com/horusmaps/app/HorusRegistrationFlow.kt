@@ -203,7 +203,7 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
                                     Row(Modifier.padding(horizontal = 10.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Text(selectedCountry.flag, fontSize = 18.sp)
                                         Spacer(Modifier.width(5.dp))
-                                        Text("+\${selectedCountry.dialCode}", color = Color(0xFF263B55), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text("+${selectedCountry.dialCode}", color = Color(0xFF263B55), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                         Icon(Icons.Default.ExpandMore, null, tint = Color(0xFF60748B), modifier = Modifier.size(17.dp))
                                     }
                                 }
@@ -322,7 +322,7 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
                                     Text(country.flag, fontSize = 19.sp)
                                     Spacer(Modifier.width(10.dp))
                                     Text(country.name, Modifier.weight(1f), color = Color(0xFF26364A), fontSize = 13.sp)
-                                    Text("+\${country.dialCode}", color = Color(0xFF087FE5), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("+${country.dialCode}", color = Color(0xFF087FE5), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
                             }
                         }
