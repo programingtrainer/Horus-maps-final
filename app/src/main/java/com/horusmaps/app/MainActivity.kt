@@ -309,8 +309,8 @@ class MainActivity : ComponentActivity() {
                                     mapInitializationRequested.value = true
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
-                                        // Prevent repeated world copies when zooming out.
-                                        map.setMinZoomPreference(1.0)
+                                        // Allow the full-world zoom range so Liberty can show its continent labels.
+                                        map.setMinZoomPreference(0.0)
                                         map.setStyle(
                                             Style.Builder().fromUri(remoteConfig.styleUrl)
                                         ) { style ->
