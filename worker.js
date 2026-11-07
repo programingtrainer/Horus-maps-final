@@ -112,6 +112,7 @@ export default {
 
     if (url.pathname === "/v1/auth/email-availability" && request.method === "POST") {
       if (!env.HORUS_USERS) return json({ ok: false, error: "Database unavailable" }, 503);
+      let registerStage = "request_parse";
       try {
         const body = await readJson(request);
         const username = normalizeEmailUsername(body.username);
@@ -156,11 +157,13 @@ export default {
           return json({ ok: false, error: "كلمة المرور ضعيفة. استخدم 8 أحرف على الأقل ومزيجًا من أنواع مختلفة من الرموز." }, 400);
         }
 
+        registerStage = "password_hash";
         const salt = crypto.getRandomValues(new Uint8Array(16));
         const passwordHash = await hashPassword(password, salt);
         const userId = crypto.randomUUID();
         const saltEncoded = toBase64Url(salt);
 
+        registerStage = "database_insert";
         const result = await env.HORUS_USERS.prepare(
           "INSERT INTO users (id, first_name, last_name, phone, email, password_hash, password_salt) VALUES (?, ?, ?, ?, ?, ?, ?)"
         ).bind(userId, firstName, lastName, phone || null, email, passwordHash, saltEncoded).run();
@@ -179,7 +182,18 @@ export default {
         if (message.includes("UNIQUE constraint failed") || message.includes("users.email")) {
           return json({ ok: false, error: "هذا البريد مستخدم بالفعل. اختر اسمًا آخر." }, 409);
         }
-        return json({ ok: false, error: "حدث خطأ أثناء إنشاء الحساب. حاول مرة أخرى." }, 503);
+        const errorCode = "AUTH_REGISTER_" + registerStage.toUpperCase();
+        console.error("[HorusAuth] Registration failed", {
+          stage: registerStage,
+          errorName: String(error && error.name || "Error"),
+          errorMessage: message.slice(0, 300),
+          errorCode
+        });
+        return json({
+          ok: false,
+          error: "حدث خطأ أثناء إنشاء الحساب. حاول مرة أخرى.",
+          errorCode
+        }, 503);
       }
     }
 
