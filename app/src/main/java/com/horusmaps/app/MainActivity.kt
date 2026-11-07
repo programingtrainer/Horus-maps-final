@@ -410,7 +410,16 @@ class MainActivity : ComponentActivity() {
                     if (map != null) {
                         map.setStyle(Style.Builder().fromUri(remoteConfig.styleUrl)) { style ->
                             runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language, is3DMode) }
-                            map.animateCamera(CameraUpdateFactory.newCameraPosition(\n                                org.maplibre.android.camera.CameraPosition.Builder()\n                                    .target(map.cameraPosition.target)\n                                    .zoom(remoteConfig.initialZoom)\n                                    .bearing(if (is3DMode) map.cameraPosition.bearing else 0.0)\n                                    .tilt(if (is3DMode) 50.0 else 0.0)\n                                    .build()\n                            ), 500)
+                            map.animateCamera(
+                                CameraUpdateFactory.newCameraPosition(
+                                    org.maplibre.android.camera.CameraPosition.Builder()
+                                        .target(map.cameraPosition.target)
+                                        .zoom(remoteConfig.initialZoom)
+                                        .bearing(if (is3DMode) map.cameraPosition.bearing else 0.0)
+                                        .tilt(if (is3DMode) 50.0 else 0.0)
+                                        .build()
+                                ), 500
+                            )
                         }
                     }
                 }
@@ -449,6 +458,7 @@ class MainActivity : ComponentActivity() {
                                             map.cameraPosition =
                                                 org.maplibre.android.camera.CameraPosition.Builder()
                                                     .zoom(remoteConfig.initialZoom)
+                                                    .tilt(if (is3DMode) 50.0 else 0.0)
                                                     .build()
                                             val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                                             val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
