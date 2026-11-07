@@ -130,7 +130,7 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
             style.addSource(
                 org.maplibre.android.style.sources.GeoJsonSource(
                     "horus-continent-boundaries",
-                    continentGeoJsonUrl
+                    java.net.URI(continentGeoJsonUrl)
                 )
             )
         }
