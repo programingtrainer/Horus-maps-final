@@ -357,7 +357,7 @@ class MainActivity : ComponentActivity() {
                 var mapLibreMap by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
                 var remoteConfig by remember { mutableStateOf(HorusRemoteConfig.loadCached(this@MainActivity)) }
                 var showWelcomeSheet by remember { mutableStateOf(remoteConfig.showWelcomePanel) }
-                var is3DMode by remember { mutableStateOf(remoteConfig.showBuildings3D) }
+                var is3DMode by remember { mutableStateOf(remoteConfig.showBuildings3D && remoteConfig.initialZoom >= 14.0) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                     val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
                     if (granted) mapLibreMap?.getStyle { style ->
