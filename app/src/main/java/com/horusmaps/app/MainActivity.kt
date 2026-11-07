@@ -110,7 +110,7 @@ private fun installMapAppearance(context: Context, style: Style, configuredLangu
             val text = if (useArabic) Expression.get("name_ar") else Expression.get("name_en")
             val continentLabels = SymbolLayer("horus-continent-labels-layer", "horus-continent-labels").apply {
                 minZoom = 0.0f
-                maxZoom = 2.35f
+                maxZoom = 1.95f
                 setProperties(PropertyFactory.textField(text), PropertyFactory.textSize(13f), PropertyFactory.textColor("#34465C"), PropertyFactory.textHaloColor("#FFFFFF"), PropertyFactory.textHaloWidth(1.6f), PropertyFactory.textAllowOverlap(true), PropertyFactory.textIgnorePlacement(true))
             }
             style.addLayer(continentLabels)
@@ -352,7 +352,7 @@ class MainActivity : ComponentActivity() {
                                     mapInitializationRequested.value = true
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
-                                        // Allow the full-world zoom range so Liberty can show its continent labels.
+                                        // Fit one world across the viewport at maximum zoom-out; keep horizontal wrapping enabled.
                                         val mapWidthPx = view.width.toDouble().takeIf { it > 0.0 } ?: resources.displayMetrics.widthPixels.toDouble()
                                         val oneWorldMinZoom = (kotlin.math.ln(mapWidthPx / 512.0) / kotlin.math.ln(2.0) + 0.08).coerceIn(0.0, 2.0)
                                         map.setMinZoomPreference(oneWorldMinZoom)
