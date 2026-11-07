@@ -127,6 +127,7 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
     }
 
     LaunchedEffect(usernameNormalized, stage) {
+        checkingEmail = false
         if (stage != 1) return@LaunchedEffect
         emailAvailable = null
         emailMessage = ""
