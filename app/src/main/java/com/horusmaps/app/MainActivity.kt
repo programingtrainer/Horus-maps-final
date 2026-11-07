@@ -112,8 +112,9 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
         )
     }
 
-    // Use a dedicated, dissolved continent-boundary dataset rather than
-    // tracing the world coastline or reusing national borders.
+    // Use GBIF's seven-continent cookie-cutter polygons. Their terrestrial
+    // divisions are carefully delineated; ocean divisions are cartographic,
+    // not official maritime boundaries. Source: gbif/continents (ODbL).
     runCatching {
         val continentOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
             org.maplibre.android.style.expressions.Expression.linear(),
@@ -126,7 +127,7 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
 
         if (style.getSource("horus-continent-boundaries") == null) {
             val continentGeoJsonUrl =
-                "https://services.arcgis.com/8veDRDlhXWywYP3S/ArcGIS/rest/services/Change_in_water_storage_WFL1/FeatureServer/0/query?where=1=1&outFields=CONTINENT&returnGeometry=true&outSR=4326&f=geojson"
+                "https://raw.githubusercontent.com/gbif/continents/master/continent_cookie_cutter.geojson"
             style.addSource(
                 org.maplibre.android.style.sources.GeoJsonSource(
                     "horus-continent-boundaries",
