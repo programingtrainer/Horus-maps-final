@@ -44,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +59,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.i18n.phonenumbers.PhoneNumberUtil
@@ -215,9 +218,9 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
                                     singleLine = true, shape = RoundedCornerShape(14.dp), colors = authFieldColors()
                                 )
                             }
-                            AuthPasswordInput(password, { password = it; errorMessage = "" }, "كلمة المرور", showPassword) { showPassword = !showPassword }
+                            AuthPasswordInput(password, { password = it.take(128); errorMessage = "" }, "كلمة المرور", showPassword) { showPassword = !showPassword }
                             PasswordStrengthIndicator(strength, password.isNotEmpty())
-                            AuthPasswordInput(confirmPassword, { confirmPassword = it; errorMessage = "" }, "تأكيد كلمة المرور", showConfirmPassword) { showConfirmPassword = !showConfirmPassword }
+                            AuthPasswordInput(confirmPassword, { confirmPassword = it.take(128); errorMessage = "" }, "تأكيد كلمة المرور", showConfirmPassword) { showConfirmPassword = !showConfirmPassword }
                             if (confirmPassword.isNotEmpty()) {
                                 Text(
                                     if (password == confirmPassword) "كلمتا المرور متطابقتان ✓" else "كلمتا المرور غير متطابقتين",
@@ -230,6 +233,7 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
                                     errorMessage = when {
                                         firstName.trim().length < 2 -> "اكتب الاسم الأول بشكل صحيح."
                                         lastName.trim().length < 2 -> "اكتب اسم العائلة بشكل صحيح."
+                                        password.length > 128 -> "كلمة المرور يجب ألا تتجاوز 128 حرفًا."
                                         strength == PasswordLevel.WEAK -> "كلمة المرور ضعيفة. استخدم 8 أحرف على الأقل ومزيجًا من الحروف والأرقام أو الرموز."
                                         password != confirmPassword -> "تأكيد كلمة المرور غير مطابق."
                                         else -> ""
@@ -246,17 +250,19 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
                         1 -> Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
                             Text("اختر اسم بريدك", color = Color(0xFF172B45), fontSize = 19.sp, fontWeight = FontWeight.Bold)
                             Text("سيكون هذا عنوانك داخل HorusMaps.", color = Color(0xFF7B8797), fontSize = 12.sp)
-                            Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp)).background(Color(0xFFF3F6FA)).padding(start = 12.dp, end = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                Row(
+                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp)).background(Color(0xFFF3F6FA)).padding(start = 12.dp, end = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                 OutlinedTextField(
                                     value = username,
                                     onValueChange = { username = it.lowercase(Locale.ROOT).filter { ch -> ch.isLetterOrDigit() || ch == '.' || ch == '_' || ch == '-' }; errorMessage = "" },
                                     modifier = Modifier.weight(1f), placeholder = { Text("اسم البريد") },
                                     singleLine = true, shape = RoundedCornerShape(14.dp), colors = authFieldColors()
                                 )
-                                Text("@horus.com", color = Color(0xFF087FE5), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("@horus.com", color = Color(0xFF087FE5), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
                             }
                             when {
                                 checkingEmail -> Row(verticalAlignment = Alignment.CenterVertically) {
