@@ -161,19 +161,8 @@ private fun applyMapDimension(
     style: Style,
     is3D: Boolean
 ) {
-    val visibility = if (is3D) {
-        org.maplibre.android.style.layers.Property.VISIBLE
-    } else {
-        org.maplibre.android.style.layers.Property.NONE
-    }
-
-    style.layers
-        .filterIsInstance<org.maplibre.android.style.layers.FillExtrusionLayer>()
-        .forEach { layer ->
-            layer.setProperties(
-                org.maplibre.android.style.layers.PropertyFactory.visibility(visibility)
-            )
-        }
+    // Keep 3D building extrusions visible in both camera modes.
+    // The 2D/3D toggle changes only the camera tilt.
 
     val current = map.cameraPosition
     val target = org.maplibre.android.camera.CameraPosition.Builder()
@@ -320,6 +309,8 @@ class MainActivity : ComponentActivity() {
                                     mapInitializationRequested.value = true
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
+                                        // Prevent repeated world copies when zooming out.
+                                        map.setMinZoomPreference(1.0)
                                         map.setStyle(
                                             Style.Builder().fromUri(remoteConfig.styleUrl)
                                         ) { style ->
