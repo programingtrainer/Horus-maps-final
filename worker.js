@@ -191,7 +191,7 @@ export default {
         });
         return json({
           ok: false,
-          error: "حدث خطأ أثناء إنشاء الحساب. حاول مرة أخرى.",
+          error: "حدث خطأ أثناء إنشاء الحساب. حاول مرة أخرى. (رمز: " + errorCode + ")",
           errorCode
         }, 503);
       }
