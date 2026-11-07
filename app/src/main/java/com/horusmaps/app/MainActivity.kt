@@ -220,6 +220,7 @@ class MainActivity : ComponentActivity() {
                 val mapView = remember { MapView(this@MainActivity) }
                 val mapInitializationRequested = remember { mutableStateOf(false) }
                 var mapLibreMap by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
+                var is3DMode by remember { mutableStateOf(false) }
                 var remoteConfig by remember { mutableStateOf(HorusRemoteConfig.loadCached(this@MainActivity)) }
                 var showWelcomeSheet by remember { mutableStateOf(remoteConfig.showWelcomePanel) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -229,6 +230,15 @@ class MainActivity : ComponentActivity() {
                         centerOnCurrentLocation(mapLibreMap!!)
                     }
                     else Toast.makeText(this@MainActivity, "يلزم السماح بإذن الموقع لتحديد موقعك الحالي.", Toast.LENGTH_LONG).show()
+                }
+                fun toggleMapPerspective() {
+                    val map = mapLibreMap ?: return
+                    val nextTilt = if (is3DMode) 0.0 else 60.0
+                    val camera = org.maplibre.android.camera.CameraPosition.Builder(map.cameraPosition)
+                        .tilt(nextTilt)
+                        .build()
+                    map.animateCamera(CameraUpdateFactory.newCameraPosition(camera), 650)
+                    is3DMode = !is3DMode
                 }
                 fun requestOrLocate() {
                     if (!remoteConfig.currentLocation) return
@@ -309,27 +319,52 @@ class MainActivity : ComponentActivity() {
                             }
                         )
 
-                        if (remoteConfig.currentLocation) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .navigationBarsPadding()
+                                .padding(end = 18.dp, bottom = 28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
                             Surface(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .navigationBarsPadding()
-                                    .padding(end = 18.dp, bottom = 28.dp)
-                                    .size(54.dp),
+                                modifier = Modifier.size(54.dp),
                                 shape = androidx.compose.foundation.shape.CircleShape,
                                 color = Color.White,
                                 shadowElevation = 7.dp
                             ) {
-                                androidx.compose.material3.IconButton(
-                                    onClick = { requestOrLocate() },
-                                    modifier = Modifier.fillMaxSize()
+                                androidx.compose.material3.TextButton(
+                                    onClick = { toggleMapPerspective() },
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.MyLocation,
-                                        contentDescription = "تحديد موقعي الحالي",
-                                        tint = Color(0xFF287FE8),
-                                        modifier = Modifier.size(25.dp)
+                                    Text(
+                                        text = if (is3DMode) "2D" else "3D",
+                                        color = Color(0xFF287FE8),
+                                        fontSize = 17.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
+                                }
+                            }
+
+                            if (remoteConfig.currentLocation) {
+                                Surface(
+                                    modifier = Modifier.size(54.dp),
+                                    shape = androidx.compose.foundation.shape.CircleShape,
+                                    color = Color.White,
+                                    shadowElevation = 7.dp
+                                ) {
+                                    androidx.compose.material3.IconButton(
+                                        onClick = { requestOrLocate() },
+                                        modifier = Modifier.fillMaxSize()
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.MyLocation,
+                                            contentDescription = "تحديد موقعي الحالي",
+                                            tint = Color(0xFF287FE8),
+                                            modifier = Modifier.size(25.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
