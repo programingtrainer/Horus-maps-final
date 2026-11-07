@@ -81,8 +81,8 @@ import org.maplibre.android.location.modes.RenderMode
 private fun installMapAppearance(context: Context, style: Style, configuredLanguage: String, showBuildings3D: Boolean) {
     // Replace dense political details at world scale with a clean land outline and continent labels.
     runCatching {
-        style.getLayer("label_country_1")?.maxZoom = 1.8f
-        style.getLayer("label_country_2")?.maxZoom = 1.8f
+        style.getLayer("label_country_1")?.minZoom = 1.8f
+        style.getLayer("label_country_2")?.minZoom = 1.8f
         (style.getLayer("boundary_2") as? LineLayer)?.minZoom = 2.0f
         if (style.getSource("horus-continent-land") == null) {
             val landGeoJson = context.assets.open("continents_land.geojson").bufferedReader().use { it.readText() }
