@@ -74,7 +74,7 @@ import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
 
-private fun installMapAppearance(context: android.content.Context, style: Style, configuredLanguage: String, showBuildings3D: Boolean) {
+private fun installMapAppearance(context: android.content.Context, style: Style, configuredLanguage: String) {
     // Match the old map's device-language labels.
     val language = if (configuredLanguage == "device") java.util.Locale.getDefault().language.lowercase(java.util.Locale.ROOT) else configuredLanguage.lowercase(java.util.Locale.ROOT)
     val localizedName = org.maplibre.android.style.expressions.Expression.coalesce(
@@ -214,10 +214,15 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
                 maxZoom = 3.46f
                 setProperties(
                     org.maplibre.android.style.layers.PropertyFactory.textField(continentText),
-                    org.maplibre.android.style.layers.PropertyFactory.textSize(12.5f),
-                    org.maplibre.android.style.layers.PropertyFactory.textColor("#34485F"),
+                    org.maplibre.android.style.layers.PropertyFactory.textFont(arrayOf("Noto Sans Regular")),
+                    org.maplibre.android.style.layers.PropertyFactory.textSize(14.0f),
+                    org.maplibre.android.style.layers.PropertyFactory.textColor("#24384D"),
                     org.maplibre.android.style.layers.PropertyFactory.textHaloColor("#FFFFFF"),
-                    org.maplibre.android.style.layers.PropertyFactory.textHaloWidth(1.8f),
+                    org.maplibre.android.style.layers.PropertyFactory.textHaloWidth(2.4f),
+                    org.maplibre.android.style.layers.PropertyFactory.textHaloBlur(0.15f),
+                    org.maplibre.android.style.layers.PropertyFactory.textMaxWidth(11.0f),
+                    org.maplibre.android.style.layers.PropertyFactory.textAnchor("center"),
+                    org.maplibre.android.style.layers.PropertyFactory.textJustify("center"),
                     org.maplibre.android.style.layers.PropertyFactory.textAllowOverlap(true),
                     org.maplibre.android.style.layers.PropertyFactory.textIgnorePlacement(true),
                     org.maplibre.android.style.layers.PropertyFactory.textOpacity(continentOpacity)
@@ -229,16 +234,11 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
         android.util.Log.e("HorusMaps", "Unable to install dissolved continent overview", error)
     }
 
-    // Let the remote setting explicitly enable or disable 3D building layers.
-    if (!showBuildings3D) {
-        style.layers
-            .filterIsInstance<org.maplibre.android.style.layers.FillExtrusionLayer>()
-            .forEach { style.removeLayer(it) }
-    }
-
+    // 3D building geometry remains installed in BOTH camera modes.
+    // The 2D/3D control changes camera pitch only; it never removes extrusion layers.
     // Keep the old map's 3D building appearance without duplicating
     // an extrusion layer already supplied by the Liberty style.
-    if (showBuildings3D && style.layers.none { it is org.maplibre.android.style.layers.FillExtrusionLayer }) {
+    if (style.layers.none { it is org.maplibre.android.style.layers.FillExtrusionLayer }) {
         val sourceId = when {
             style.getSource("openmaptiles") != null -> "openmaptiles"
             style.getSource("openfreemap") != null -> "openfreemap"
@@ -374,13 +374,10 @@ class MainActivity : ComponentActivity() {
                         val nextCamera = org.maplibre.android.camera.CameraPosition.Builder()
                             .target(current.target)
                             .zoom(current.zoom)
-                            .bearing(if (enable3D) current.bearing else 0.0)
+                            .bearing(current.bearing)
                             .tilt(if (enable3D) 50.0 else 0.0)
                             .build()
                         map.animateCamera(CameraUpdateFactory.newCameraPosition(nextCamera), 650)
-                        map.getStyle { style ->
-                            installMapAppearance(this@MainActivity, style, remoteConfig.language, enable3D)
-                        }
                     }
                 }
                 fun requestOrLocate() {
@@ -409,7 +406,7 @@ class MainActivity : ComponentActivity() {
                     val map = mapLibreMap
                     if (map != null) {
                         map.setStyle(Style.Builder().fromUri(remoteConfig.styleUrl)) { style ->
-                            runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language, is3DMode) }
+                            runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language) }
                             map.animateCamera(
                                 CameraUpdateFactory.newCameraPosition(
                                     org.maplibre.android.camera.CameraPosition.Builder()
@@ -442,12 +439,17 @@ class MainActivity : ComponentActivity() {
                                     mapInitializationRequested.value = true
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
+                                        val mapViewportWidthPx = resources.displayMetrics.widthPixels.toDouble()
+                                        val singleWorldMinZoom = (
+                                            kotlin.math.ln(mapViewportWidthPx / 512.0) / kotlin.math.ln(2.0) + 0.12
+                                        ).coerceAtLeast(0.0)
+                                        map.setMinZoomPreference(singleWorldMinZoom)
                                         map.setStyle(
                                             Style.Builder().fromUri(remoteConfig.styleUrl)
                                         ) { style ->
                                             // The old repository used this same Liberty vector
                                             // basemap, with localized labels and 3D buildings.
-                                            runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language, is3DMode) }
+                                            runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language) }
                                                 .onFailure { error ->
                                                     android.util.Log.e(
                                                         "HorusMaps",
@@ -472,37 +474,31 @@ class MainActivity : ComponentActivity() {
                             }
                         )
 
-                        Row(
+                        Column(
                             modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .statusBarsPadding()
-                                .padding(top = 14.dp, end = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .align(Alignment.BottomEnd)
+                                .navigationBarsPadding()
+                                .padding(end = 18.dp, bottom = if (remoteConfig.currentLocation) 96.dp else 28.dp),
+                            horizontalAlignment = Alignment.End,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Button(
-                                onClick = { changeMapMode(false) },
-                                modifier = Modifier.height(42.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
+                                onClick = { changeMapMode(!is3DMode) },
+                                modifier = Modifier.height(46.dp),
+                                shape = RoundedCornerShape(15.dp),
+                                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 0.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (!is3DMode) Color(0xFF087FE5) else Color.White,
-                                    contentColor = if (!is3DMode) Color.White else Color(0xFF26364A)
+                                    containerColor = Color.White,
+                                    contentColor = Color(0xFF26364A)
                                 ),
-                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 5.dp)
-                            ) { Text("2D", fontWeight = FontWeight.Bold, fontSize = 14.sp) }
-
-                            Button(
-                                onClick = { changeMapMode(true) },
-                                modifier = Modifier.height(42.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (is3DMode) Color(0xFF087FE5) else Color.White,
-                                    contentColor = if (is3DMode) Color.White else Color(0xFF26364A)
-                                ),
-                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 5.dp)
-                            ) { Text("3D", fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 7.dp)
+                            ) {
+                                Text(
+                                    text = if (is3DMode) "3D" else "2D",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp
+                                )
+                            }
                         }
 
                         if (remoteConfig.currentLocation) {
