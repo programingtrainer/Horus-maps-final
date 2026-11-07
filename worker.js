@@ -149,6 +149,9 @@ export default {
         if (!isValidEmailUsername(username)) {
           return json({ ok: false, error: "اسم بريد Horus غير صالح." }, 400);
         }
+        if (password.length > 128) {
+          return json({ ok: false, error: "كلمة المرور طويلة جدًا. الحد الأقصى 128 حرفًا." }, 400);
+        }
         if (passwordStrength(password) === "weak") {
           return json({ ok: false, error: "كلمة المرور ضعيفة. استخدم 8 أحرف على الأقل ومزيجًا من أنواع مختلفة من الرموز." }, 400);
         }
