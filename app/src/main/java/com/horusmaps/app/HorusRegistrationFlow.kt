@@ -101,7 +101,7 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
     var selectedCountry by remember { mutableStateOf(countries.firstOrNull { it.region == "SA" } ?: countries.first()) }
     var showCountryPicker by remember { mutableStateOf(false) }
     var countryQuery by remember { mutableStateOf("") }
-    var stage by remember { mutableStateOf(0) }
+    var stage by remember { mutableStateOf(-1) }
     var firstName by remember { mutableStateOf("") }
     var lastName by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
@@ -114,13 +114,18 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
     var emailMessage by remember { mutableStateOf("") }
     var checkingEmail by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
-    var loadingMessage by remember { mutableStateOf("جاري إنشاء حسابك بأمان...") }
+    var loadingMessage by remember { mutableStateOf("جاري توجيهك إلى صفحة إنشاء الحساب...") }
     var errorMessage by remember { mutableStateOf("") }
 
     val strength = passwordLevel(password)
     val usernameNormalized = username.trim().lowercase(Locale.ROOT)
     val validUsername = Regex("^[a-z0-9](?:[a-z0-9._-]{1,22}[a-z0-9])$").matches(usernameNormalized) &&
         !usernameNormalized.contains("..") && !usernameNormalized.contains(".-") && !usernameNormalized.contains("-.")
+
+    LaunchedEffect(Unit) {
+        delay(850)
+        stage = 0
+    }
 
     LaunchedEffect(usernameNormalized, stage) {
         if (stage != 1) return@LaunchedEffect
@@ -167,12 +172,12 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
             }
             Spacer(Modifier.height(12.dp))
             Text(
-                when (stage) { 0 -> "أنشئ حسابك"; 1 -> "بريدك في عالم حورس"; else -> "مرحبًا بك في HorusMaps" },
+                when (stage) { -1 -> "جاري توجيهك"; 0 -> "أنشئ حسابك"; 1 -> "بريدك في عالم حورس"; else -> "مرحبًا بك في HorusMaps" },
                 color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                when (stage) { 0 -> "ابدأ رحلتك واكتشف العالم بحسابك الخاص"; 1 -> "اختر اسم بريدك الإلكتروني الخاص بك"; else -> "نجهّز حسابك ونأخذك إلى الخريطة" },
+                when (stage) { -1 -> "نجهّز لك صفحة إنشاء الحساب"; 0 -> "ابدأ رحلتك واكتشف العالم بحسابك الخاص"; 1 -> "اختر اسم بريدك الإلكتروني الخاص بك"; else -> "نجهّز حسابك ونأخذك إلى الخريطة" },
                 color = Color.White.copy(alpha = 0.78f), fontSize = 13.sp, textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(22.dp))
