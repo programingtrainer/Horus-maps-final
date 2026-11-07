@@ -83,13 +83,13 @@ private fun installMapAppearance(context: Context, style: Style, configuredLangu
     runCatching {
         style.getLayer("label_country_1")?.maxZoom = 1.8f
         style.getLayer("label_country_2")?.maxZoom = 1.8f
-        (style.getLayer("boundary_2") as? LineLayer)?.minZoom = 1.6f
+        (style.getLayer("boundary_2") as? LineLayer)?.minZoom = 2.0f
         if (style.getSource("horus-continent-land") == null) {
             val landGeoJson = context.assets.open("continents_land.geojson").bufferedReader().use { it.readText() }
             style.addSource(GeoJsonSource("horus-continent-land", landGeoJson))
             val outline = LineLayer("horus-continent-outline", "horus-continent-land").apply {
                 minZoom = 0.0f
-                maxZoom = 2.35f
+                maxZoom = 1.95f
                 setProperties(PropertyFactory.lineColor("#8194A9"), PropertyFactory.lineWidth(1.15f), PropertyFactory.lineOpacity(0.82f))
             }
             val firstLabel = style.layers.firstOrNull { it is SymbolLayer }
