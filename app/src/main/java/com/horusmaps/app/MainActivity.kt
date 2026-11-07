@@ -96,14 +96,16 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
             }
         }
 
-    // Fade political detail in as the camera zooms toward countries.
-    // The Liberty style already provides these stable layer IDs.
+    // Treat the continent overview and country map as two distinct cartographic
+    // levels: political boundaries/labels are completely hidden at world scale,
+    // then fade in only as the user zooms into country scale.
     val countryDetailOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
         org.maplibre.android.style.expressions.Expression.linear(),
         org.maplibre.android.style.expressions.Expression.zoom(),
-        org.maplibre.android.style.expressions.Expression.stop(1.35, 0.0),
-        org.maplibre.android.style.expressions.Expression.stop(2.35, 0.45),
-        org.maplibre.android.style.expressions.Expression.stop(3.35, 1.0)
+        org.maplibre.android.style.expressions.Expression.stop(0.0, 0.0),
+        org.maplibre.android.style.expressions.Expression.stop(2.0, 0.0),
+        org.maplibre.android.style.expressions.Expression.stop(2.9, 0.55),
+        org.maplibre.android.style.expressions.Expression.stop(3.7, 1.0)
     )
     style.getLayer("boundary_2")?.setProperties(
         org.maplibre.android.style.layers.PropertyFactory.lineOpacity(countryDetailOpacity)
@@ -127,21 +129,25 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
             )
         }
 
+        // At world scale, continent polygons are an opaque thematic layer.
+        // This deliberately masks the country-level cartography underneath,
+        // instead of merely tinting it and leaving country borders visible.
+        // Both visual levels cross-fade smoothly through the intermediate zooms.
         val continentOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
             org.maplibre.android.style.expressions.Expression.linear(),
             org.maplibre.android.style.expressions.Expression.zoom(),
-            org.maplibre.android.style.expressions.Expression.stop(0.0, 0.96),
-            org.maplibre.android.style.expressions.Expression.stop(1.4, 0.90),
-            org.maplibre.android.style.expressions.Expression.stop(2.6, 0.48),
-            org.maplibre.android.style.expressions.Expression.stop(3.45, 0.0)
+            org.maplibre.android.style.expressions.Expression.stop(0.0, 1.0),
+            org.maplibre.android.style.expressions.Expression.stop(2.0, 1.0),
+            org.maplibre.android.style.expressions.Expression.stop(2.9, 0.55),
+            org.maplibre.android.style.expressions.Expression.stop(3.7, 0.0)
         )
         val continentFillOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
             org.maplibre.android.style.expressions.Expression.linear(),
             org.maplibre.android.style.expressions.Expression.zoom(),
-            org.maplibre.android.style.expressions.Expression.stop(0.0, 0.075),
-            org.maplibre.android.style.expressions.Expression.stop(1.5, 0.065),
-            org.maplibre.android.style.expressions.Expression.stop(2.7, 0.02),
-            org.maplibre.android.style.expressions.Expression.stop(3.45, 0.0)
+            org.maplibre.android.style.expressions.Expression.stop(0.0, 1.0),
+            org.maplibre.android.style.expressions.Expression.stop(2.0, 1.0),
+            org.maplibre.android.style.expressions.Expression.stop(2.9, 0.55),
+            org.maplibre.android.style.expressions.Expression.stop(3.7, 0.0)
         )
 
         val firstSymbolLayerId = style.layers
