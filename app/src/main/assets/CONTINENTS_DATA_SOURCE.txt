@@ -1,0 +1,3 @@
+HorusMaps continent overview outlines are derived from Natural Earth 1:110m physical land data (ne_110m_land.geojson).
+Natural Earth data is public domain. Source: https://www.naturalearthdata.com/.
+The geometry is simplified to two decimal places for mobile rendering.

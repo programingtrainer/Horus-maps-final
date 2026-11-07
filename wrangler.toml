@@ -5,3 +5,9 @@ compatibility_date = "2026-11-06"
 [[kv_namespaces]]
 binding = "HORUS_MAPS_CONFIG"
 id = "7be96ca0a9c3487fa6b0702a964caf7c"
+
+[previews]
+
+[[previews.kv_namespaces]]
+binding = "HORUS_MAPS_CONFIG"
+id = "1d944d08456c43eb998b8ca3f8e5fb9e"
