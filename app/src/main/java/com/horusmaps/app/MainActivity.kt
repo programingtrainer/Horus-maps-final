@@ -24,6 +24,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -72,7 +74,7 @@ import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
 
-private fun installMapAppearance(style: Style, configuredLanguage: String, showBuildings3D: Boolean) {
+private fun installMapAppearance(context: android.content.Context, style: Style, configuredLanguage: String, showBuildings3D: Boolean) {
     // Match the old map's device-language labels.
     val language = if (configuredLanguage == "device") java.util.Locale.getDefault().language.lowercase(java.util.Locale.ROOT) else configuredLanguage.lowercase(java.util.Locale.ROOT)
     val localizedName = org.maplibre.android.style.expressions.Expression.coalesce(
@@ -112,44 +114,69 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
         )
     }
 
-    // Use GBIF's seven-continent cookie-cutter polygons. Their terrestrial
-    // divisions are carefully delineated; ocean divisions are cartographic,
-    // not official maritime boundaries. Source: gbif/continents (ODbL).
+    // Seven dissolved terrestrial continent geometries generated from Natural Earth 1:110m.
+    // Country polygons are merged by shared edges, so ocean partition lines are never drawn.
     runCatching {
-        val continentOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
-            org.maplibre.android.style.expressions.Expression.linear(),
-            org.maplibre.android.style.expressions.Expression.zoom(),
-            org.maplibre.android.style.expressions.Expression.stop(0.0, 0.95),
-            org.maplibre.android.style.expressions.Expression.stop(1.5, 0.95),
-            org.maplibre.android.style.expressions.Expression.stop(2.6, 0.45),
-            org.maplibre.android.style.expressions.Expression.stop(3.35, 0.0)
-        )
-
-        if (style.getSource("horus-continent-boundaries") == null) {
-            val continentGeoJsonUrl =
-                "https://raw.githubusercontent.com/gbif/continents/master/continent_cookie_cutter.geojson"
+        val continentGeoJson = context.assets.open("continents.geojson").bufferedReader().use { it.readText() }
+        if (style.getSource("horus-continent-shapes") == null) {
             style.addSource(
                 org.maplibre.android.style.sources.GeoJsonSource(
-                    "horus-continent-boundaries",
-                    java.net.URI(continentGeoJsonUrl)
+                    "horus-continent-shapes",
+                    continentGeoJson
                 )
             )
         }
 
-        if (style.getLayer("horus-continent-outline") == null) {
-            val continentOutline = org.maplibre.android.style.layers.LineLayer(
-                "horus-continent-outline",
-                "horus-continent-boundaries"
+        val continentOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
+            org.maplibre.android.style.expressions.Expression.linear(),
+            org.maplibre.android.style.expressions.Expression.zoom(),
+            org.maplibre.android.style.expressions.Expression.stop(0.0, 0.96),
+            org.maplibre.android.style.expressions.Expression.stop(1.4, 0.90),
+            org.maplibre.android.style.expressions.Expression.stop(2.6, 0.48),
+            org.maplibre.android.style.expressions.Expression.stop(3.45, 0.0)
+        )
+        val continentFillOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
+            org.maplibre.android.style.expressions.Expression.linear(),
+            org.maplibre.android.style.expressions.Expression.zoom(),
+            org.maplibre.android.style.expressions.Expression.stop(0.0, 0.075),
+            org.maplibre.android.style.expressions.Expression.stop(1.5, 0.065),
+            org.maplibre.android.style.expressions.Expression.stop(2.7, 0.02),
+            org.maplibre.android.style.expressions.Expression.stop(3.45, 0.0)
+        )
+
+        val firstSymbolLayerId = style.layers
+            .filterIsInstance<org.maplibre.android.style.layers.SymbolLayer>()
+            .firstOrNull()?.id
+
+        if (style.getLayer("horus-continent-fill") == null) {
+            val fill = org.maplibre.android.style.layers.FillLayer(
+                "horus-continent-fill",
+                "horus-continent-shapes"
             ).apply {
                 minZoom = 0.0f
-                maxZoom = 3.36f
+                maxZoom = 3.46f
                 setProperties(
-                    org.maplibre.android.style.layers.PropertyFactory.lineColor("#71869D"),
-                    org.maplibre.android.style.layers.PropertyFactory.lineWidth(1.35f),
+                    org.maplibre.android.style.layers.PropertyFactory.fillColor("#7898B5"),
+                    org.maplibre.android.style.layers.PropertyFactory.fillOpacity(continentFillOpacity)
+                )
+            }
+            if (firstSymbolLayerId != null) style.addLayerBelow(fill, firstSymbolLayerId) else style.addLayer(fill)
+        }
+
+        if (style.getLayer("horus-continent-outline") == null) {
+            val outline = org.maplibre.android.style.layers.LineLayer(
+                "horus-continent-outline",
+                "horus-continent-shapes"
+            ).apply {
+                minZoom = 0.0f
+                maxZoom = 3.46f
+                setProperties(
+                    org.maplibre.android.style.layers.PropertyFactory.lineColor("#536F88"),
+                    org.maplibre.android.style.layers.PropertyFactory.lineWidth(1.15f),
                     org.maplibre.android.style.layers.PropertyFactory.lineOpacity(continentOpacity)
                 )
             }
-            style.addLayer(continentOutline)
+            if (firstSymbolLayerId != null) style.addLayerBelow(outline, firstSymbolLayerId) else style.addLayer(outline)
         }
 
         if (style.getSource("horus-continent-labels") == null) {
@@ -173,20 +200,18 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
         if (style.getLayer("horus-continent-labels-layer") == null) {
             val useArabic = (if (configuredLanguage == "device") {
                 java.util.Locale.getDefault().language
-            } else {
-                configuredLanguage
-            }).startsWith("ar", ignoreCase = true)
+            } else configuredLanguage).startsWith("ar", ignoreCase = true)
             val continentText = if (useArabic) {
                 org.maplibre.android.style.expressions.Expression.get("name_ar")
             } else {
                 org.maplibre.android.style.expressions.Expression.get("name_en")
             }
-            val continentLabels = org.maplibre.android.style.layers.SymbolLayer(
+            val labels = org.maplibre.android.style.layers.SymbolLayer(
                 "horus-continent-labels-layer",
                 "horus-continent-labels"
             ).apply {
                 minZoom = 0.0f
-                maxZoom = 3.36f
+                maxZoom = 3.46f
                 setProperties(
                     org.maplibre.android.style.layers.PropertyFactory.textField(continentText),
                     org.maplibre.android.style.layers.PropertyFactory.textSize(12.5f),
@@ -198,10 +223,10 @@ private fun installMapAppearance(style: Style, configuredLanguage: String, showB
                     org.maplibre.android.style.layers.PropertyFactory.textOpacity(continentOpacity)
                 )
             }
-            style.addLayer(continentLabels)
+            style.addLayer(labels)
         }
     }.onFailure { error ->
-        android.util.Log.e("HorusMaps", "Unable to install continent overview", error)
+        android.util.Log.e("HorusMaps", "Unable to install dissolved continent overview", error)
     }
 
     // Let the remote setting explicitly enable or disable 3D building layers.
@@ -332,6 +357,7 @@ class MainActivity : ComponentActivity() {
                 var mapLibreMap by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
                 var remoteConfig by remember { mutableStateOf(HorusRemoteConfig.loadCached(this@MainActivity)) }
                 var showWelcomeSheet by remember { mutableStateOf(remoteConfig.showWelcomePanel) }
+                var is3DMode by remember { mutableStateOf(remoteConfig.showBuildings3D) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                     val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
                     if (granted) mapLibreMap?.getStyle { style ->
@@ -339,6 +365,23 @@ class MainActivity : ComponentActivity() {
                         centerOnCurrentLocation(mapLibreMap!!)
                     }
                     else Toast.makeText(this@MainActivity, "يلزم السماح بإذن الموقع لتحديد موقعك الحالي.", Toast.LENGTH_LONG).show()
+                }
+                fun changeMapMode(enable3D: Boolean) {
+                    if (is3DMode == enable3D) return
+                    is3DMode = enable3D
+                    mapLibreMap?.let { map ->
+                        val current = map.cameraPosition
+                        val nextCamera = org.maplibre.android.camera.CameraPosition.Builder()
+                            .target(current.target)
+                            .zoom(current.zoom)
+                            .bearing(if (enable3D) current.bearing else 0.0)
+                            .tilt(if (enable3D) 50.0 else 0.0)
+                            .build()
+                        map.animateCamera(CameraUpdateFactory.newCameraPosition(nextCamera), 650)
+                        map.getStyle { style ->
+                            installMapAppearance(this@MainActivity, style, remoteConfig.language, enable3D)
+                        }
+                    }
                 }
                 fun requestOrLocate() {
                     if (!remoteConfig.currentLocation) return
@@ -366,8 +409,8 @@ class MainActivity : ComponentActivity() {
                     val map = mapLibreMap
                     if (map != null) {
                         map.setStyle(Style.Builder().fromUri(remoteConfig.styleUrl)) { style ->
-                            runCatching { installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D) }
-                            map.animateCamera(CameraUpdateFactory.zoomTo(remoteConfig.initialZoom), 500)
+                            runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language, is3DMode) }
+                            map.animateCamera(CameraUpdateFactory.newCameraPosition(\n                                org.maplibre.android.camera.CameraPosition.Builder()\n                                    .target(map.cameraPosition.target)\n                                    .zoom(remoteConfig.initialZoom)\n                                    .bearing(if (is3DMode) map.cameraPosition.bearing else 0.0)\n                                    .tilt(if (is3DMode) 50.0 else 0.0)\n                                    .build()\n                            ), 500)
                         }
                     }
                 }
@@ -395,7 +438,7 @@ class MainActivity : ComponentActivity() {
                                         ) { style ->
                                             // The old repository used this same Liberty vector
                                             // basemap, with localized labels and 3D buildings.
-                                            runCatching { installMapAppearance(style, remoteConfig.language, remoteConfig.showBuildings3D) }
+                                            runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language, is3DMode) }
                                                 .onFailure { error ->
                                                     android.util.Log.e(
                                                         "HorusMaps",
@@ -418,6 +461,39 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         )
+
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .statusBarsPadding()
+                                .padding(top = 14.dp, end = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { changeMapMode(false) },
+                                modifier = Modifier.height(42.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (!is3DMode) Color(0xFF087FE5) else Color.White,
+                                    contentColor = if (!is3DMode) Color.White else Color(0xFF26364A)
+                                ),
+                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 5.dp)
+                            ) { Text("2D", fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+
+                            Button(
+                                onClick = { changeMapMode(true) },
+                                modifier = Modifier.height(42.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (is3DMode) Color(0xFF087FE5) else Color.White,
+                                    contentColor = if (is3DMode) Color.White else Color(0xFF26364A)
+                                ),
+                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 5.dp)
+                            ) { Text("3D", fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+                        }
 
                         if (remoteConfig.currentLocation) {
                             Surface(
