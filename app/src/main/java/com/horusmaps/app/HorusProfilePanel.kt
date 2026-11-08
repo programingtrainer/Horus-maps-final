@@ -92,7 +92,9 @@ fun ProfilePanel(
 ) {
     var destination by remember { mutableStateOf(ProfileDestination.PROFILE) }
     var drawerVisible by remember { mutableStateOf(true) }
+    var openWelcomeAfterDismiss by remember { mutableStateOf(false) }
     val requestDismiss: () -> Unit = { drawerVisible = false }
+    val requestWelcome: () -> Unit = { openWelcomeAfterDismiss = true; drawerVisible = false }
 
     BackHandler {
         if (destination == ProfileDestination.SETTINGS) destination = ProfileDestination.PROFILE
@@ -101,7 +103,7 @@ fun ProfilePanel(
     LaunchedEffect(drawerVisible) {
         if (!drawerVisible) {
             delay(340)
-            onDismiss()
+            if (openWelcomeAfterDismiss) onOpenWelcome() else onDismiss()
         }
     }
 
@@ -155,7 +157,7 @@ fun ProfilePanel(
                             onDismiss = requestDismiss,
                             onPickImage = onPickImage,
                             onOpenSettings = { destination = ProfileDestination.SETTINGS },
-                            onOpenWelcome = onOpenWelcome
+                            onOpenWelcome = requestWelcome
                         )
                         ProfileDestination.SETTINGS -> ProfileSettings(
                             is3DMode = is3DMode,
