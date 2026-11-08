@@ -111,7 +111,7 @@ async function getAuthenticatedUser(request, env) {
   if (!match) return null;
   const tokenHash = await sha256Base64Url(match[1]);
   return await env.HORUS_USERS.prepare(
-    "SELECT u.id, u.first_name, u.last_name, u.phone, u.email, s.token_hash FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? LIMIT 1"
+    "SELECT u.id, u.first_name, u.last_name, u.phone, u.email, u.password_hash, u.password_salt, s.token_hash FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? LIMIT 1"
   ).bind(tokenHash, new Date().toISOString()).first();
 }
 
@@ -336,6 +336,21 @@ export default {
       try {
         const user = await getAuthenticatedUser(request, env);
         if (!user) return json({ ok: false, error: "انتهت صلاحية الجلسة. سجل الدخول مرة أخرى." }, 401);
+        const body = await readJson(request);
+        const password = String(body.password || "");
+        if (!password || password.length > 128) {
+          return json({ ok: false, error: "أدخل كلمة المرور لتأكيد حذف الحساب." }, 400);
+        }
+        const saltText = String(user.password_salt || "").replace(/-/g, "+").replace(/_/g, "/");
+        const saltBytes = Uint8Array.from(atob(saltText + "=".repeat((4 - saltText.length % 4) % 4)), c => c.charCodeAt(0));
+        const submittedHash = await hashPassword(password, saltBytes);
+        const expected = String(user.password_hash || "");
+        let mismatch = submittedHash.length ^ expected.length;
+        const maxLength = Math.max(submittedHash.length, expected.length);
+        for (let i = 0; i < maxLength; i++) {
+          mismatch |= (submittedHash.charCodeAt(i) || 0) ^ (expected.charCodeAt(i) || 0);
+        }
+        if (mismatch !== 0) return json({ ok: false, error: "كلمة المرور غير صحيحة. لم يتم حذف الحساب." }, 401);
         const result = await env.HORUS_USERS.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
         if (!result.success || result.meta?.changes !== 1) {
           return json({ ok: false, error: "تعذر حذف الحساب. حاول مرة أخرى." }, 500);
