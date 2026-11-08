@@ -865,26 +865,47 @@ class MainActivity : ComponentActivity() {
                             fontWeight = FontWeight.Medium
                         )
 
-                        // Keep required map-data credits visible after removing the native attribution button.
-                        Text(
-                            text = "OpenFreeMap © OpenMapTiles · © OpenStreetMap contributors",
+                        // Compact, single-line source credits: keep the required map attributions,
+                        // without adding a second brand label or the optional OpenFreeMap name.
+                        Row(
                             modifier = Modifier
                                 .align(Alignment.BottomStart)
                                 .navigationBarsPadding()
-                                .clickable {
+                                .padding(start = 8.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "© OpenMapTiles.org",
+                                modifier = Modifier.clickable {
+                                    startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://openmaptiles.org/")
+                                        )
+                                    )
+                                },
+                                color = Color(0xFF344054),
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Normal,
+                                maxLines = 1
+                            )
+                            Text("  ·  ", color = Color(0xFF344054), fontSize = 8.sp)
+                            Text(
+                                text = "© OpenStreetMap",
+                                modifier = Modifier.clickable {
                                     startActivity(
                                         android.content.Intent(
                                             android.content.Intent.ACTION_VIEW,
                                             android.net.Uri.parse("https://openstreetmap.org/copyright")
                                         )
                                     )
-                                }
-                                .padding(start = 8.dp, bottom = 2.dp),
-                            color = Color(0xFF344054),
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Normal,
-                            maxLines = 1
-                        )
+                                },
+                                color = Color(0xFF344054),
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Normal,
+                                maxLines = 1
+                            )
+                        }
 
                         Column(
                             modifier = Modifier
