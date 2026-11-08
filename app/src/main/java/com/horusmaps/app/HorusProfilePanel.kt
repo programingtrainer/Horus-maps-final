@@ -71,6 +71,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 private enum class ProfileDestination { PROFILE, SETTINGS }
@@ -90,9 +91,18 @@ fun ProfilePanel(
     onToggle3D: (Boolean) -> Unit
 ) {
     var destination by remember { mutableStateOf(ProfileDestination.PROFILE) }
+    var drawerVisible by remember { mutableStateOf(true) }
+    val requestDismiss: () -> Unit = { drawerVisible = false }
+
     BackHandler {
         if (destination == ProfileDestination.SETTINGS) destination = ProfileDestination.PROFILE
-        else onDismiss()
+        else requestDismiss()
+    }
+    LaunchedEffect(drawerVisible) {
+        if (!drawerVisible) {
+            delay(340)
+            onDismiss()
+        }
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -100,13 +110,13 @@ fun ProfilePanel(
             Modifier.fillMaxSize().clickable(
                 indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-            ) { onDismiss() }
+            ) { requestDismiss() }
         ) {
             drawRect(Color(0x99071324))
         }
 
         androidx.compose.animation.AnimatedVisibility(
-            visible = true,
+            visible = drawerVisible,
             modifier = Modifier.align(Alignment.CenterEnd),
             enter = slideInHorizontally(
                 animationSpec = tween(420, easing = FastOutSlowInEasing),
@@ -142,7 +152,7 @@ fun ProfilePanel(
                             phone = phone,
                             imageUri = imageUri,
                             isGuest = isGuest,
-                            onDismiss = onDismiss,
+                            onDismiss = requestDismiss,
                             onPickImage = onPickImage,
                             onOpenSettings = { destination = ProfileDestination.SETTINGS },
                             onOpenWelcome = onOpenWelcome
@@ -181,9 +191,13 @@ private fun ProfileOverview(
     LaunchedEffect(imageUri) {
         profileBitmap = if (imageUri.isNullOrBlank()) null else withContext(Dispatchers.IO) {
             runCatching {
-                context.contentResolver.openInputStream(Uri.parse(imageUri))?.use {
-                    BitmapFactory.decodeStream(it)
-                }
+                val uri = Uri.parse(imageUri)
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                val longestSide = maxOf(bounds.outWidth, bounds.outHeight)
+                val sampleSize = if (longestSide > 1200) (longestSide / 1200).coerceAtLeast(1) else 1
+                val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
             }.getOrNull()
         }
     }
