@@ -72,8 +72,10 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.geometry.LatLng
@@ -82,6 +84,34 @@ import org.maplibre.android.maps.Style
 import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
+
+
+/**
+ * Downloads the selected MapLibre style and enables the experimental native globe projection.
+ * If the style cannot be fetched or parsed, callers fall back to loading its original URI.
+ */
+private suspend fun fetchGlobeStyleJson(styleUrl: String): String? = withContext(Dispatchers.IO) {
+    runCatching {
+        val connection = java.net.URL(styleUrl).openConnection() as java.net.HttpURLConnection
+        try {
+            connection.connectTimeout = 12_000
+            connection.readTimeout = 18_000
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("User-Agent", "HorusMaps-Android")
+            val status = connection.responseCode
+            if (status !in 200..299) error("Style request failed: HTTP $status")
+            val jsonText = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val styleJson = org.json.JSONObject(jsonText)
+            styleJson.put("projection", org.json.JSONObject().put("type", "globe"))
+            styleJson.toString()
+        } finally {
+            connection.disconnect()
+        }
+    }.onFailure {
+        android.util.Log.w("HorusMaps", "Globe style preparation failed; using original style URI", it)
+    }.getOrNull()
+}
 
 private fun installMapAppearance(context: android.content.Context, style: Style, configuredLanguage: String) {
     // Match the old map's device-language labels.
@@ -733,9 +763,16 @@ class MainActivity : ComponentActivity() {
                     if (!hasCompletedOnboarding) showWelcomeSheet = remoteConfig.showWelcomePanel
                     val map = mapLibreMap
                     if (map != null) {
-                        map.setStyle(Style.Builder().fromUri(remoteConfig.styleUrl)) { style ->
-                            runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language) }
-                            map.animateCamera(
+                        accountScope.launch {
+                            val globeStyleJson = fetchGlobeStyleJson(remoteConfig.styleUrl)
+                            val styleBuilder = if (globeStyleJson != null) {
+                                Style.Builder().fromJson(globeStyleJson)
+                            } else {
+                                Style.Builder().fromUri(remoteConfig.styleUrl)
+                            }
+                            map.setStyle(styleBuilder) { style ->
+                                runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language) }
+                                map.animateCamera(
                                 CameraUpdateFactory.newCameraPosition(
                                     org.maplibre.android.camera.CameraPosition.Builder()
                                         .target(map.cameraPosition.target)
@@ -744,7 +781,8 @@ class MainActivity : ComponentActivity() {
                                         .tilt(if (is3DMode) 50.0 else 0.0)
                                         .build()
                                 ), 500
-                            )
+                                )
+                            }
                         }
                     }
                 }
@@ -771,10 +809,17 @@ class MainActivity : ComponentActivity() {
                                         val singleWorldMinZoom = (
                                             kotlin.math.ln(mapViewportWidthPx / 512.0) / kotlin.math.ln(2.0) + 0.12
                                         ).coerceAtLeast(0.0)
-                                        map.setMinZoomPreference(singleWorldMinZoom)
-                                        map.setStyle(
-                                            Style.Builder().fromUri(remoteConfig.styleUrl)
-                                        ) { style ->
+                                        // The globe can fit the complete planet at zoom 0; Mercator's
+                                        // one-world minimum would unnecessarily crop the spherical view.
+                                        map.setMinZoomPreference(0.0)
+                                        accountScope.launch {
+                                            val globeStyleJson = fetchGlobeStyleJson(remoteConfig.styleUrl)
+                                            val styleBuilder = if (globeStyleJson != null) {
+                                                Style.Builder().fromJson(globeStyleJson)
+                                            } else {
+                                                Style.Builder().fromUri(remoteConfig.styleUrl)
+                                            }
+                                            map.setStyle(styleBuilder) { style ->
                                             // The old repository used this same Liberty vector
                                             // basemap, with localized labels and 3D buildings.
                                             runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language) }
@@ -795,6 +840,7 @@ class MainActivity : ComponentActivity() {
                                             if (remoteConfig.currentLocation && (fine || coarse)) {
                                                 enableBlueLocationDot(map, style)
                                                 centerOnCurrentLocation(map)
+                                            }
                                             }
                                         }
                                     }
