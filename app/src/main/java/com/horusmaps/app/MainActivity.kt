@@ -387,6 +387,7 @@ class MainActivity : ComponentActivity() {
                     mutableStateOf(!hasCompletedOnboarding && remoteConfig.showWelcomePanel)
                 }
                 var showRegistration by remember { mutableStateOf(false) }
+                var showLogin by remember { mutableStateOf(false) }
                 var showProfile by remember { mutableStateOf(false) }
                 var is3DMode by remember { mutableStateOf(remoteConfig.showBuildings3D && remoteConfig.initialZoom >= 14.0) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -631,11 +632,8 @@ class MainActivity : ComponentActivity() {
                                     showRegistration = true
                                 },
                                 onSignIn = {
-                                    Toast.makeText(
-                                        this@MainActivity,
-                                        "تسجيل الدخول سيتم تفعيله في مرحلة المصادقة",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    showWelcomeSheet = false
+                                    showLogin = true
                                 },
                                 onContinueAsGuest = {
                                     accountPrefs.edit().putBoolean("onboarding_completed", true).apply()
@@ -681,6 +679,40 @@ class MainActivity : ComponentActivity() {
                                         "تم إنشاء حسابك: $email",
                                         Toast.LENGTH_LONG
                                     ).show()
+                                }
+                            )
+                        }
+
+                        AnimatedVisibility(
+                            visible = showLogin,
+                            modifier = Modifier.fillMaxSize(),
+                            enter = slideInVertically(
+                                animationSpec = tween(520, easing = FastOutSlowInEasing),
+                                initialOffsetY = { it / 3 }
+                            ) + fadeIn(tween(420)),
+                            exit = slideOutVertically(
+                                animationSpec = tween(420, easing = FastOutSlowInEasing),
+                                targetOffsetY = { it / 3 }
+                            ) + fadeOut(tween(300))
+                        ) {
+                            HorusLoginFlow(
+                                onBack = {
+                                    showLogin = false
+                                    showWelcomeSheet = true
+                                },
+                                onLoginSuccess = { email, firstName, lastName, phone ->
+                                    accountPrefs.edit()
+                                        .putString("email", email)
+                                        .putString("first_name", firstName)
+                                        .putString("last_name", lastName)
+                                        .putString("phone", phone)
+                                        .putBoolean("onboarding_completed", true)
+                                        .apply()
+                                    accountEmail = email
+                                    isGuestMode = false
+                                    hasCompletedOnboarding = true
+                                    showLogin = false
+                                    showWelcomeSheet = false
                                 }
                             )
                         }
