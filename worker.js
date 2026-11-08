@@ -132,6 +132,7 @@ export default {
 
     if (url.pathname === "/v1/auth/register" && request.method === "POST") {
       if (!env.HORUS_USERS) return json({ ok: false, error: "Database unavailable" }, 503);
+      let registerStage = "request_parse";
       try {
         const body = await readJson(request);
         const firstName = String(body.firstName || "").trim();
@@ -158,11 +159,13 @@ export default {
         }
 
         registerStage = "password_hash";
+        registerStage = "password_hash";
         const salt = crypto.getRandomValues(new Uint8Array(16));
         const passwordHash = await hashPassword(password, salt);
         const userId = crypto.randomUUID();
         const saltEncoded = toBase64Url(salt);
 
+        registerStage = "database_insert";
         registerStage = "database_insert";
         const result = await env.HORUS_USERS.prepare(
           "INSERT INTO users (id, first_name, last_name, phone, email, password_hash, password_salt) VALUES (?, ?, ?, ?, ?, ?, ?)"
