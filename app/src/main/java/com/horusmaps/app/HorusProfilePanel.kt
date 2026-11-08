@@ -46,7 +46,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -70,6 +70,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -96,7 +97,7 @@ fun ProfilePanel(
     onAddAccount: () -> Unit,
     onSwitchAccount: (String) -> Unit,
     onLogout: () -> Unit,
-    onDeleteAccount: () -> Unit,
+    onDeleteAccount: (String) -> Unit,
     onToggle3D: (Boolean) -> Unit
 ) {
     var destination by remember { mutableStateOf(ProfileDestination.PROFILE) }
@@ -456,10 +457,11 @@ private fun ProfileSettings(
     is3DMode: Boolean,
     onToggle3D: (Boolean) -> Unit,
     onLogout: () -> Unit,
-    onDeleteAccount: () -> Unit,
+    onDeleteAccount: (String) -> Unit,
     onBack: () -> Unit
 ) {
     var showDeleteConfirmation by remember { mutableStateOf(false) }
+    var deletePassword by remember { mutableStateOf("") }
     val context = LocalContext.current
     val appVersion = remember {
         runCatching {
@@ -530,15 +532,34 @@ private fun ProfileSettings(
             AlertDialog(
                 onDismissRequest = { showDeleteConfirmation = false },
                 title = { Text("حذف الحساب نهائيًا؟", fontWeight = FontWeight.Bold) },
-                text = { Text("سيتم حذف حسابك وبياناته من خوادم HorusMaps، ولن تتمكن من استعادته. هل أنت متأكد؟") },
+                text = {
+                    Column {
+                        Text("سيتم حذف حسابك وبياناته من خوادم HorusMaps نهائيًا، ولن تتمكن من استعادته. أدخل كلمة المرور لتأكيد هويتك.")
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = deletePassword,
+                            onValueChange = { deletePassword = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("كلمة المرور") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
+                },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirmation = false
-                        onDeleteAccount()
-                    }) { Text("حذف نهائيًا", color = Color(0xFFB42318), fontWeight = FontWeight.Bold) }
+                    TextButton(
+                        enabled = deletePassword.isNotBlank(),
+                        onClick = {
+                            val password = deletePassword
+                            deletePassword = ""
+                            showDeleteConfirmation = false
+                            onDeleteAccount(password)
+                        }
+                    ) { Text("حذف نهائيًا", color = Color(0xFFB42318), fontWeight = FontWeight.Bold) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showDeleteConfirmation = false }) { Text("إلغاء") }
+                    TextButton(onClick = { showDeleteConfirmation = false; deletePassword = "" }) { Text("إلغاء") }
                 }
             )
         }
