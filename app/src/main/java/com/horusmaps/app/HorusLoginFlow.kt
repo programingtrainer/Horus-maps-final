@@ -62,7 +62,7 @@ fun HorusLoginFlow(
     initialEmail: String = "",
     onBack: () -> Unit,
     onCreateAccount: () -> Unit,
-    onLoginSuccess: (String, String, String, String) -> Unit
+    onLoginSuccess: (String, String, String, String, String) -> Unit
 ) {
     var screen by remember { mutableStateOf(LoginScreen.REDIRECT) }
     var email by remember { mutableStateOf(initialEmail) }
@@ -74,6 +74,7 @@ fun HorusLoginFlow(
     var successfulFirstName by remember { mutableStateOf("") }
     var successfulLastName by remember { mutableStateOf("") }
     var successfulPhone by remember { mutableStateOf("") }
+    var successfulSessionToken by remember { mutableStateOf("") }
 
     val normalizedEmail = email.trim().lowercase()
     val emailValid = Regex("^[a-z0-9](?:[a-z0-9._-]{1,22}[a-z0-9])@horus\\.com$")
@@ -96,6 +97,7 @@ fun HorusLoginFlow(
                     successfulFirstName = result.firstName
                     successfulLastName = result.lastName
                     successfulPhone = result.phone
+                    successfulSessionToken = result.sessionToken.orEmpty()
                     welcomeName = result.firstName.ifBlank { result.email.substringBefore("@") }
                     screen = LoginScreen.WELCOME
                 } else {
@@ -108,7 +110,7 @@ fun HorusLoginFlow(
             }
         } else if (screen == LoginScreen.WELCOME) {
             delay(1600)
-            onLoginSuccess(successfulEmail, successfulFirstName, successfulLastName, successfulPhone)
+            onLoginSuccess(successfulEmail, successfulFirstName, successfulLastName, successfulPhone, successfulSessionToken)
         }
     }
 
