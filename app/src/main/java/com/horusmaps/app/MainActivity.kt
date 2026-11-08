@@ -469,7 +469,7 @@ class MainActivity : ComponentActivity() {
                                 return@launch
                             }
                         }
-                        HorusAccountStore.clearToken(accountPrefs, email)
+                        HorusAccountStore.removeAccount(accountPrefs, email, deleteProfile = false)
                         accountPrefs.edit().remove("email").remove("first_name").remove("last_name")
                             .remove("phone").remove("profile_image_uri").putBoolean("onboarding_completed", true).apply()
                         accountEmail = null
