@@ -92,7 +92,7 @@ private fun passwordLevel(value: String): PasswordLevel {
 }
 
 @Composable
-fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String, String, String, String) -> Unit) {
+fun HorusRegistrationFlow(onBack: () -> Unit, onLoginRequested: () -> Unit, onAccountCreated: (String, String, String, String) -> Unit) {
     val phoneUtil = remember { PhoneNumberUtil.getInstance() }
     val countries = remember {
         val locale = Locale.getDefault()
@@ -306,6 +306,11 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String, String,
                 }
             }
             Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("لديك حساب بالفعل؟ ", color = Color.White.copy(alpha = 0.88f), fontSize = 13.sp)
+                Text("تسجيل الدخول", color = Color(0xFFFFD27A), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(onClick = onLoginRequested).padding(4.dp))
+            }
+            Spacer(Modifier.height(14.dp))
             Text("HORUS MAPS  •  EXPLORE WITHOUT LIMITS", color = Color.White.copy(alpha = 0.64f), fontSize = 9.sp, letterSpacing = 1.sp)
             Spacer(Modifier.height(14.dp))
         }
