@@ -476,6 +476,7 @@ class MainActivity : ComponentActivity() {
                         isGuestMode = true
                         hasCompletedOnboarding = true
                         savedAccounts = HorusAccountStore.accounts(accountPrefs)
+                        showProfile = false
                         Toast.makeText(this@MainActivity, "تم تسجيل الخروج بنجاح.", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -501,6 +502,7 @@ class MainActivity : ComponentActivity() {
                         isGuestMode = true
                         hasCompletedOnboarding = true
                         savedAccounts = HorusAccountStore.accounts(accountPrefs)
+                        showProfile = false
                         Toast.makeText(this@MainActivity, "تم حذف الحساب نهائيًا.", Toast.LENGTH_LONG).show()
                     }
                 }
@@ -825,7 +827,11 @@ class MainActivity : ComponentActivity() {
                             HorusRegistrationFlow(
                                 onBack = {
                                     showRegistration = false
-                                    showWelcomeSheet = true
+                                    if (authReturnToProfile) {
+                                        showProfile = true
+                                        authReturnToProfile = false
+                                        pendingLoginEmail = ""
+                                    } else showWelcomeSheet = true
                                 },
                                 onLoginRequested = {
                                     showRegistration = false
