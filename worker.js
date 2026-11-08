@@ -21,7 +21,7 @@ const DEFAULT_CONFIG = {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, If-None-Match",
+  "Access-Control-Allow-Headers": "Content-Type, If-None-Match, Authorization",
   "Access-Control-Max-Age": "86400"
 };
 
@@ -279,6 +279,9 @@ export default {
         }
 
         const session = await createSession(env, user.id);
+        const profileImageData = env.HORUS_MAPS_CONFIG
+          ? await env.HORUS_MAPS_CONFIG.get("horus:profile-image:v1:" + user.id)
+          : null;
         return json({
           ok: true,
           message: "تم تسجيل الدخول بنجاح.",
@@ -289,7 +292,8 @@ export default {
             firstName: user.first_name,
             lastName: user.last_name,
             phone: user.phone || "",
-            email: user.email
+            email: user.email,
+            profileImageData
           }
         });
       } catch (error) {
@@ -301,14 +305,42 @@ export default {
       }
     }
 
+    if (url.pathname === "/v1/profile/image" && request.method === "POST") {
+      if (!env.HORUS_USERS || !env.HORUS_MAPS_CONFIG) {
+        return json({ ok: false, error: "خدمة حفظ الصور غير متاحة حاليًا." }, 503);
+      }
+      try {
+        const user = await getAuthenticatedUser(request, env);
+        if (!user) return json({ ok: false, error: "انتهت صلاحية الجلسة. سجل الدخول مرة أخرى." }, 401);
+        const raw = await request.text();
+        if (raw.length > 400000) return json({ ok: false, error: "الصورة كبيرة جدًا. اختر صورة أصغر." }, 413);
+        const body = JSON.parse(raw);
+        const imageBase64 = String(body.imageBase64 || "");
+        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(imageBase64) || imageBase64.length < 100) {
+          return json({ ok: false, error: "ملف الصورة غير صالح." }, 400);
+        }
+        await env.HORUS_MAPS_CONFIG.put(
+          "horus:profile-image:v1:" + user.id,
+          "data:image/jpeg;base64," + imageBase64
+        );
+        return json({ ok: true, message: "تم حفظ صورة الحساب." });
+      } catch (error) {
+        console.error("[HorusProfile] Image upload failed", String(error && error.message || "").slice(0, 200));
+        return json({ ok: false, error: "تعذر حفظ صورة الملف الشخصي الآن." }, 503);
+      }
+    }
+
     if (url.pathname === "/v1/auth/me" && request.method === "POST") {
       if (!env.HORUS_USERS) return json({ ok: false, error: "Database unavailable" }, 503);
       try {
         const user = await getAuthenticatedUser(request, env);
         if (!user) return json({ ok: false, error: "انتهت صلاحية الجلسة. سجل الدخول مرة أخرى." }, 401);
+        const profileImageData = env.HORUS_MAPS_CONFIG
+          ? await env.HORUS_MAPS_CONFIG.get("horus:profile-image:v1:" + user.id)
+          : null;
         return json({ ok: true, user: {
           id: user.id, firstName: user.first_name, lastName: user.last_name,
-          phone: user.phone || "", email: user.email
+          phone: user.phone || "", email: user.email, profileImageData
         }});
       } catch (error) {
         console.error("[HorusAuth] Session lookup failed", String(error && error.message || "").slice(0, 200));
@@ -358,6 +390,13 @@ export default {
         ).bind(user.id).first();
         if (remainingUser) {
           return json({ ok: false, error: "تعذر حذف الحساب. لم يتم تأكيد الحذف." }, 500);
+        }
+        if (env.HORUS_MAPS_CONFIG) {
+          try {
+            await env.HORUS_MAPS_CONFIG.delete("horus:profile-image:v1:" + user.id);
+          } catch (imageCleanupError) {
+            console.error("[HorusProfile] Deleted account but profile image cleanup failed", String(imageCleanupError && imageCleanupError.message || "").slice(0, 160));
+          }
         }
         return json({ ok: true, message: "تم حذف الحساب نهائيًا." });
       } catch (error) {
