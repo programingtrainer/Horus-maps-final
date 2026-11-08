@@ -17,6 +17,7 @@ data class LoginResult(
     val lastName: String = "",
     val phone: String = "",
     val sessionToken: String? = null,
+    val profileImageData: String? = null,
     val message: String
 )
 
@@ -58,6 +59,7 @@ object HorusAuthApi {
                 lastName = user.optString("lastName"),
                 phone = user.optString("phone"),
                 sessionToken = root.optString("sessionToken").takeIf { it.isNotBlank() },
+                profileImageData = user.optString("profileImageData").takeIf { it.isNotBlank() && it != "null" },
                 message = root.optString("message", "تم تسجيل الدخول بنجاح.")
             )
         } else {
@@ -77,9 +79,16 @@ object HorusAuthApi {
                 lastName = user.optString("lastName"),
                 phone = user.optString("phone"),
                 sessionToken = token,
+                profileImageData = user.optString("profileImageData").takeIf { it.isNotBlank() && it != "null" },
                 message = "تم التحقق من الحساب."
             )
         } else LoginResult(false, message = root.optString("error", "الجلسة غير صالحة."))
+    }
+
+    suspend fun uploadProfileImage(token: String, imageBase64: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val response = post("/v1/profile/image", JSONObject().put("imageBase64", imageBase64), token)
+        Pair(response.first in 200..299 && response.second.optBoolean("ok"),
+            response.second.optString("error", response.second.optString("message")))
     }
 
     suspend fun logout(token: String): Boolean = withContext(Dispatchers.IO) {
