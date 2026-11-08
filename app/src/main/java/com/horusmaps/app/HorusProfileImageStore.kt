@@ -18,6 +18,7 @@ object HorusProfileImageStore {
             context.contentResolver.openInputStream(uri)?.use {
                 BitmapFactory.decodeStream(it, null, bounds)
             } ?: return@runCatching null
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
 
             var sample = 1
             while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1024) sample *= 2
