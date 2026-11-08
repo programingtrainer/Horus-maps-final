@@ -86,6 +86,35 @@ async function readJson(request) {
   return await request.json();
 }
 
+function randomSessionToken() {
+  return toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+async function sha256Base64Url(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return toBase64Url(new Uint8Array(digest));
+}
+
+async function createSession(env, userId) {
+  const token = randomSessionToken();
+  const tokenHash = await sha256Base64Url(token);
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  await env.HORUS_USERS.prepare(
+    "INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)"
+  ).bind(crypto.randomUUID(), userId, tokenHash, expiresAt).run();
+  return { token, expiresAt };
+}
+
+async function getAuthenticatedUser(request, env) {
+  const authorization = request.headers.get("Authorization") || "";
+  const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{40,100})$/);
+  if (!match) return null;
+  const tokenHash = await sha256Base64Url(match[1]);
+  return await env.HORUS_USERS.prepare(
+    "SELECT u.id, u.first_name, u.last_name, u.phone, u.email, s.token_hash FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? LIMIT 1"
+  ).bind(tokenHash, new Date().toISOString()).first();
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -185,9 +214,12 @@ export default {
           }, 500);
         }
 
+        const session = await createSession(env, userId);
         return json({
           ok: true,
           message: "تم إنشاء حساب Horus بنجاح.",
+          sessionToken: session.token,
+          expiresAt: session.expiresAt,
           user: { id: userId, firstName, lastName, email }
         }, 201);
       } catch (error) {
@@ -246,9 +278,12 @@ export default {
           return json({ ok: false, error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." }, 401);
         }
 
+        const session = await createSession(env, user.id);
         return json({
           ok: true,
           message: "تم تسجيل الدخول بنجاح.",
+          sessionToken: session.token,
+          expiresAt: session.expiresAt,
           user: {
             id: user.id,
             firstName: user.first_name,
@@ -263,6 +298,52 @@ export default {
           errorMessage: String(error && error.message || "").slice(0, 200)
         });
         return json({ ok: false, error: "تعذر تسجيل الدخول الآن. تحقق من اتصالك وحاول مجددًا." }, 503);
+      }
+    }
+
+    if (url.pathname === "/v1/auth/me" && request.method === "POST") {
+      if (!env.HORUS_USERS) return json({ ok: false, error: "Database unavailable" }, 503);
+      try {
+        const user = await getAuthenticatedUser(request, env);
+        if (!user) return json({ ok: false, error: "انتهت صلاحية الجلسة. سجل الدخول مرة أخرى." }, 401);
+        return json({ ok: true, user: {
+          id: user.id, firstName: user.first_name, lastName: user.last_name,
+          phone: user.phone || "", email: user.email
+        }});
+      } catch (error) {
+        console.error("[HorusAuth] Session lookup failed", String(error && error.message || "").slice(0, 200));
+        return json({ ok: false, error: "تعذر التحقق من الجلسة الآن." }, 503);
+      }
+    }
+
+    if (url.pathname === "/v1/auth/logout" && request.method === "POST") {
+      if (!env.HORUS_USERS) return json({ ok: false, error: "Database unavailable" }, 503);
+      try {
+        const authorization = request.headers.get("Authorization") || "";
+        const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{40,100})$/);
+        if (!match) return json({ ok: true, message: "تم تسجيل الخروج." });
+        const tokenHash = await sha256Base64Url(match[1]);
+        await env.HORUS_USERS.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(tokenHash).run();
+        return json({ ok: true, message: "تم تسجيل الخروج." });
+      } catch (error) {
+        console.error("[HorusAuth] Logout failed", String(error && error.message || "").slice(0, 200));
+        return json({ ok: false, error: "تعذر تسجيل الخروج من الخادم." }, 503);
+      }
+    }
+
+    if (url.pathname === "/v1/auth/delete-account" && request.method === "POST") {
+      if (!env.HORUS_USERS) return json({ ok: false, error: "Database unavailable" }, 503);
+      try {
+        const user = await getAuthenticatedUser(request, env);
+        if (!user) return json({ ok: false, error: "انتهت صلاحية الجلسة. سجل الدخول مرة أخرى." }, 401);
+        const result = await env.HORUS_USERS.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
+        if (!result.success || result.meta?.changes !== 1) {
+          return json({ ok: false, error: "تعذر حذف الحساب. حاول مرة أخرى." }, 500);
+        }
+        return json({ ok: true, message: "تم حذف الحساب نهائيًا." });
+      } catch (error) {
+        console.error("[HorusAuth] Account deletion failed", String(error && error.message || "").slice(0, 200));
+        return json({ ok: false, error: "تعذر حذف الحساب الآن." }, 503);
       }
     }
 
