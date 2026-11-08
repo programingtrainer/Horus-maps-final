@@ -389,7 +389,20 @@ class MainActivity : ComponentActivity() {
                 var showRegistration by remember { mutableStateOf(false) }
                 var showLogin by remember { mutableStateOf(false) }
                 var showProfile by remember { mutableStateOf(false) }
+                var profileImageUri by remember { mutableStateOf(accountPrefs.getString("profile_image_uri", null)) }
                 var is3DMode by remember { mutableStateOf(remoteConfig.showBuildings3D && remoteConfig.initialZoom >= 14.0) }
+                val profileImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri != null) {
+                        runCatching {
+                            contentResolver.takePersistableUriPermission(
+                                uri,
+                                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        }
+                        profileImageUri = uri.toString()
+                        accountPrefs.edit().putString("profile_image_uri", uri.toString()).apply()
+                    }
+                }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                     val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
                     if (granted) mapLibreMap?.getStyle { style ->
@@ -540,7 +553,7 @@ class MainActivity : ComponentActivity() {
                                         .align(Alignment.TopEnd)
                                         .statusBarsPadding()
                                         .padding(top = 12.dp, end = 18.dp),
-                                    onClick = { showWelcomeSheet = true }
+                                    onClick = { showProfile = true }
                                 )
                             } else {
                                 Surface(
@@ -598,7 +611,16 @@ class MainActivity : ComponentActivity() {
                                 lastName = accountPrefs.getString("last_name", "").orEmpty(),
                                 email = accountEmail.orEmpty(),
                                 phone = accountPrefs.getString("phone", "").orEmpty(),
-                                onDismiss = { showProfile = false }
+                                imageUri = profileImageUri,
+                                isGuest = isGuestMode,
+                                is3DMode = is3DMode,
+                                onDismiss = { showProfile = false },
+                                onPickImage = { profileImagePicker.launch(arrayOf("image/*")) },
+                                onOpenWelcome = {
+                                    showProfile = false
+                                    showWelcomeSheet = true
+                                },
+                                onToggle3D = { enabled -> changeMapMode(enabled) }
                             )
                         }
 
@@ -796,121 +818,6 @@ private fun GuestAccessProfileButton(
                 )
             }
         }
-    }
-}
-
-@androidx.compose.runtime.Composable
-private fun ProfilePanel(
-    firstName: String,
-    lastName: String,
-    email: String,
-    phone: String,
-    onDismiss: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0x99071324)),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 22.dp),
-            shape = RoundedCornerShape(28.dp),
-            color = Color.White,
-            shadowElevation = 22.dp
-        ) {
-            Column(
-                modifier = Modifier.padding(22.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "الملف الشخصي",
-                        modifier = Modifier.weight(1f),
-                        color = Color(0xFF172B45),
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    androidx.compose.material3.IconButton(onClick = onDismiss) {
-                        Icon(Icons.Filled.Close, contentDescription = "إغلاق", tint = Color(0xFF64748B))
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                Box(
-                    modifier = Modifier
-                        .size(82.dp)
-                        .clip(androidx.compose.foundation.shape.CircleShape)
-                        .background(Color(0xFFEAF3FC)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        (firstName.firstOrNull()?.uppercaseChar()?.toString() ?: "H") +
-                            (lastName.firstOrNull()?.uppercaseChar()?.toString() ?: ""),
-                        color = Color(0xFF087FE5),
-                        fontSize = 27.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ").ifBlank { "مستخدم HorusMaps" },
-                    color = Color(0xFF172B45),
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text("حساب HorusMaps", color = Color(0xFF8290A2), fontSize = 12.sp)
-                Spacer(Modifier.height(22.dp))
-                ProfileInfoRow("البريد الإلكتروني", email)
-                if (phone.isNotBlank()) {
-                    Spacer(Modifier.height(10.dp))
-                    ProfileInfoRow("رقم الهاتف", phone)
-                }
-                Spacer(Modifier.height(18.dp))
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    color = Color(0xFFEAF8F1)
-                ) {
-                    Text(
-                        "✓  حسابك مُفعّل على هذا الجهاز",
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                        color = Color(0xFF16845B),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        textAlign = TextAlign.Center
-                    )
-                }
-                Spacer(Modifier.height(18.dp))
-                Button(
-                    onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    shape = RoundedCornerShape(15.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087FE5))
-                ) {
-                    Text("تم", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-    }
-}
-
-@androidx.compose.runtime.Composable
-private fun ProfileInfoRow(label: String, value: String) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFFF4F7FB))
-            .padding(horizontal = 14.dp, vertical = 11.dp)
-    ) {
-        Text(label, color = Color(0xFF7B8797), fontSize = 11.sp)
-        Spacer(Modifier.height(4.dp))
-        Text(value, color = Color(0xFF26364A), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
