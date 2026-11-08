@@ -56,6 +56,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +73,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.maplibre.android.MapLibre
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.geometry.LatLng
@@ -371,6 +373,10 @@ class MainActivity : ComponentActivity() {
                 var remoteConfig by remember { mutableStateOf(HorusRemoteConfig.loadCached(this@MainActivity)) }
                 val accountPrefs = remember { getSharedPreferences("horus_account", MODE_PRIVATE) }
                 var accountEmail by remember { mutableStateOf(accountPrefs.getString("email", null)) }
+                var savedAccounts by remember { mutableStateOf(HorusAccountStore.accounts(accountPrefs)) }
+                var pendingLoginEmail by remember { mutableStateOf("") }
+                var authReturnToProfile by remember { mutableStateOf(false) }
+                val accountScope = rememberCoroutineScope()
                 var hasCompletedOnboarding by remember {
                     mutableStateOf(
                         accountPrefs.getBoolean("onboarding_completed", false) ||
@@ -390,6 +396,131 @@ class MainActivity : ComponentActivity() {
                 var showLogin by remember { mutableStateOf(false) }
                 var showProfile by remember { mutableStateOf(false) }
                 var profileImageUri by remember { mutableStateOf(accountPrefs.getString("profile_image_uri", null)) }
+
+                fun activateAccount(email: String, firstName: String, lastName: String, phone: String, token: String?) {
+                    val oldImage = savedAccounts.firstOrNull { it.email.equals(email, true) }?.imageUri
+                    val account = HorusSavedAccount(email, firstName, lastName, phone, oldImage)
+                    HorusAccountStore.saveAccount(accountPrefs, account, token)
+                    savedAccounts = HorusAccountStore.accounts(accountPrefs)
+                    accountPrefs.edit()
+                        .putString("email", email)
+                        .putString("first_name", firstName)
+                        .putString("last_name", lastName)
+                        .putString("phone", phone)
+                        .putString("profile_image_uri", oldImage)
+                        .putBoolean("onboarding_completed", true)
+                        .apply()
+                    accountEmail = email
+                    profileImageUri = oldImage
+                    isGuestMode = false
+                    hasCompletedOnboarding = true
+                    showRegistration = false
+                    showLogin = false
+                    showWelcomeSheet = false
+                    showProfile = false
+                    pendingLoginEmail = ""
+                    authReturnToProfile = false
+                }
+
+                fun openAddAccount() {
+                    authReturnToProfile = true
+                    pendingLoginEmail = ""
+                    showProfile = false
+                    showWelcomeSheet = false
+                    showRegistration = false
+                    showLogin = true
+                }
+
+                fun switchToAccount(email: String) {
+                    if (email.equals(accountEmail, true)) return
+                    val token = HorusAccountStore.token(accountPrefs, email)
+                    if (token.isNullOrBlank()) {
+                        authReturnToProfile = true
+                        pendingLoginEmail = email
+                        showProfile = false
+                        showLogin = true
+                        return
+                    }
+                    accountScope.launch {
+                        val result = runCatching { HorusAuthApi.currentUser(token) }.getOrNull()
+                        if (result?.success == true) {
+                            activateAccount(result.email.orEmpty(), result.firstName, result.lastName, result.phone, token)
+                            Toast.makeText(this@MainActivity, "تم التبديل إلى ${result.email}", Toast.LENGTH_SHORT).show()
+                        } else {
+                            HorusAccountStore.clearToken(accountPrefs, email)
+                            authReturnToProfile = true
+                            pendingLoginEmail = email
+                            showProfile = false
+                            showLogin = true
+                            Toast.makeText(this@MainActivity, "سجّل الدخول إلى هذا الحساب مرة أخرى.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+
+                fun logoutCurrentAccount() {
+                    val email = accountEmail ?: return
+                    val token = HorusAccountStore.token(accountPrefs, email)
+                    accountScope.launch {
+                        if (!token.isNullOrBlank()) {
+                            val success = runCatching { HorusAuthApi.logout(token) }.getOrDefault(false)
+                            if (!success) {
+                                Toast.makeText(this@MainActivity, "تعذر الاتصال بالخادم. لم يتم تسجيل الخروج.", Toast.LENGTH_LONG).show()
+                                return@launch
+                            }
+                        }
+                        HorusAccountStore.clearToken(accountPrefs, email)
+                        accountPrefs.edit().remove("email").remove("first_name").remove("last_name")
+                            .remove("phone").remove("profile_image_uri").putBoolean("onboarding_completed", true).apply()
+                        accountEmail = null
+                        profileImageUri = null
+                        isGuestMode = true
+                        hasCompletedOnboarding = true
+                        savedAccounts = HorusAccountStore.accounts(accountPrefs)
+                        Toast.makeText(this@MainActivity, "تم تسجيل الخروج بنجاح.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                fun deleteCurrentAccount() {
+                    val email = accountEmail ?: return
+                    val token = HorusAccountStore.token(accountPrefs, email)
+                    if (token.isNullOrBlank()) {
+                        Toast.makeText(this@MainActivity, "سجّل الدخول مرة أخرى قبل حذف الحساب.", Toast.LENGTH_LONG).show()
+                        return
+                    }
+                    accountScope.launch {
+                        val success = runCatching { HorusAuthApi.deleteAccount(token) }.getOrDefault(false)
+                        if (!success) {
+                            Toast.makeText(this@MainActivity, "تعذر حذف الحساب. تحقق من الاتصال وحاول مجددًا.", Toast.LENGTH_LONG).show()
+                            return@launch
+                        }
+                        HorusAccountStore.removeAccount(accountPrefs, email)
+                        accountPrefs.edit().remove("email").remove("first_name").remove("last_name")
+                            .remove("phone").remove("profile_image_uri").putBoolean("onboarding_completed", true).apply()
+                        accountEmail = null
+                        profileImageUri = null
+                        isGuestMode = true
+                        hasCompletedOnboarding = true
+                        savedAccounts = HorusAccountStore.accounts(accountPrefs)
+                        Toast.makeText(this@MainActivity, "تم حذف الحساب نهائيًا.", Toast.LENGTH_LONG).show()
+                    }
+                }
+
+                LaunchedEffect(accountEmail) {
+                    if (!accountEmail.isNullOrBlank() && savedAccounts.none { it.email.equals(accountEmail, true) }) {
+                        HorusAccountStore.saveAccount(
+                            accountPrefs,
+                            HorusSavedAccount(
+                                accountEmail!!,
+                                accountPrefs.getString("first_name", "").orEmpty(),
+                                accountPrefs.getString("last_name", "").orEmpty(),
+                                accountPrefs.getString("phone", "").orEmpty(),
+                                profileImageUri
+                            ),
+                            HorusAccountStore.token(accountPrefs, accountEmail!!)
+                        )
+                        savedAccounts = HorusAccountStore.accounts(accountPrefs)
+                    }
+                }
                 var is3DMode by remember { mutableStateOf(remoteConfig.showBuildings3D && remoteConfig.initialZoom >= 14.0) }
                 val profileImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) {
@@ -401,6 +532,8 @@ class MainActivity : ComponentActivity() {
                         }
                         profileImageUri = uri.toString()
                         accountPrefs.edit().putString("profile_image_uri", uri.toString()).apply()
+                        accountEmail?.let { HorusAccountStore.updateImage(accountPrefs, it, uri.toString()) }
+                        savedAccounts = HorusAccountStore.accounts(accountPrefs)
                     }
                 }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -570,11 +703,11 @@ class MainActivity : ComponentActivity() {
                                         onClick = { showProfile = true },
                                         modifier = Modifier.fillMaxSize()
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.AccountCircle,
-                                            contentDescription = "الملف الشخصي",
-                                            tint = Color(0xFF087FE5),
-                                            modifier = Modifier.size(31.dp)
+                                        ProfileAvatar(
+                                            imageUri = profileImageUri,
+                                            firstName = accountPrefs.getString("first_name", "").orEmpty(),
+                                            lastName = accountPrefs.getString("last_name", "").orEmpty(),
+                                            modifier = Modifier.size(42.dp)
                                         )
                                     }
                                 }
@@ -619,12 +752,18 @@ class MainActivity : ComponentActivity() {
                                 imageUri = profileImageUri,
                                 isGuest = isGuestMode,
                                 is3DMode = is3DMode,
+                                accounts = savedAccounts,
+                                currentEmail = accountEmail,
                                 onDismiss = { showProfile = false },
                                 onPickImage = { profileImagePicker.launch(arrayOf("image/*")) },
                                 onOpenWelcome = {
                                     showProfile = false
                                     showWelcomeSheet = true
                                 },
+                                onAddAccount = { openAddAccount() },
+                                onSwitchAccount = { email -> switchToAccount(email) },
+                                onLogout = { logoutCurrentAccount() },
+                                onDeleteAccount = { deleteCurrentAccount() },
                                 onToggle3D = { enabled -> changeMapMode(enabled) }
                             )
                         }
@@ -692,24 +831,9 @@ class MainActivity : ComponentActivity() {
                                     showRegistration = false
                                     showLogin = true
                                 },
-                                onAccountCreated = { email, firstName, lastName, phone ->
-                                    accountPrefs.edit()
-                                        .putString("email", email)
-                                        .putString("first_name", firstName)
-                                        .putString("last_name", lastName)
-                                        .putString("phone", phone)
-                                        .putBoolean("onboarding_completed", true)
-                                        .apply()
-                                    accountEmail = email
-                                    isGuestMode = false
-                                    hasCompletedOnboarding = true
-                                    showRegistration = false
-                                    showWelcomeSheet = false
-                                    Toast.makeText(
-                                        this@MainActivity,
-                                        "تم إنشاء حسابك: $email",
-                                        Toast.LENGTH_LONG
-                                    ).show()
+                                onAccountCreated = { email, firstName, lastName, phone, token ->
+                                    activateAccount(email, firstName, lastName, phone, token)
+                                    Toast.makeText(this@MainActivity, "تم إنشاء حسابك: $email", Toast.LENGTH_LONG).show()
                                 }
                             )
                         }
@@ -727,27 +851,21 @@ class MainActivity : ComponentActivity() {
                             ) + fadeOut(tween(300))
                         ) {
                             HorusLoginFlow(
+                                initialEmail = pendingLoginEmail,
                                 onBack = {
                                     showLogin = false
-                                    showWelcomeSheet = true
+                                    if (authReturnToProfile) {
+                                        showProfile = true
+                                        authReturnToProfile = false
+                                        pendingLoginEmail = ""
+                                    } else showWelcomeSheet = true
                                 },
                                 onCreateAccount = {
                                     showLogin = false
                                     showRegistration = true
                                 },
-                                onLoginSuccess = { email, firstName, lastName, phone ->
-                                    accountPrefs.edit()
-                                        .putString("email", email)
-                                        .putString("first_name", firstName)
-                                        .putString("last_name", lastName)
-                                        .putString("phone", phone)
-                                        .putBoolean("onboarding_completed", true)
-                                        .apply()
-                                    accountEmail = email
-                                    isGuestMode = false
-                                    hasCompletedOnboarding = true
-                                    showLogin = false
-                                    showWelcomeSheet = false
+                                onLoginSuccess = { email, firstName, lastName, phone, token ->
+                                    activateAccount(email, firstName, lastName, phone, token)
                                 }
                             )
                         }
