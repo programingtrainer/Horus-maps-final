@@ -162,7 +162,26 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
                 maxZoom = 3.46f
                 setProperties(
                     // Natural land/water colors remain untouched; draw only the continent edges.
-                    org.maplibre.android.style.layers.PropertyFactory.lineColor("#526575"),
+                    org.maplibre.android.style.layers.PropertyFactory.lineColor(
+                        org.maplibre.android.style.expressions.Expression.match(
+                            org.maplibre.android.style.expressions.Expression.get("continent"),
+                            org.maplibre.android.style.expressions.Expression.literal("Africa"),
+                            org.maplibre.android.style.expressions.Expression.literal("#C58A52"),
+                            org.maplibre.android.style.expressions.Expression.literal("Asia"),
+                            org.maplibre.android.style.expressions.Expression.literal("#C87968"),
+                            org.maplibre.android.style.expressions.Expression.literal("Europe"),
+                            org.maplibre.android.style.expressions.Expression.literal("#6F91B7"),
+                            org.maplibre.android.style.expressions.Expression.literal("North America"),
+                            org.maplibre.android.style.expressions.Expression.literal("#5F9A9A"),
+                            org.maplibre.android.style.expressions.Expression.literal("South America"),
+                            org.maplibre.android.style.expressions.Expression.literal("#8B79B8"),
+                            org.maplibre.android.style.expressions.Expression.literal("Oceania"),
+                            org.maplibre.android.style.expressions.Expression.literal("#B27A9A"),
+                            org.maplibre.android.style.expressions.Expression.literal("Antarctica"),
+                            org.maplibre.android.style.expressions.Expression.literal("#8798A8"),
+                            org.maplibre.android.style.expressions.Expression.literal("#526575")
+                        )
+                    ),
                     org.maplibre.android.style.layers.PropertyFactory.lineWidth(
                         org.maplibre.android.style.expressions.Expression.interpolate(
                             org.maplibre.android.style.expressions.Expression.linear(),
