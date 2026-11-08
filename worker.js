@@ -210,6 +210,62 @@ export default {
       }
     }
 
+    if (url.pathname === "/v1/auth/login" && request.method === "POST") {
+      if (!env.HORUS_USERS) return json({ ok: false, error: "Database unavailable" }, 503);
+      try {
+        const body = await readJson(request);
+        const email = String(body.email || "").trim().toLowerCase();
+        const password = String(body.password || "");
+        if (!/^[a-z0-9](?:[a-z0-9._-]{1,22}[a-z0-9])@horus\\.com$/.test(email) ||
+            email.includes("..") || email.includes(".-") || email.includes("-." ) ||
+            !password || password.length > 128) {
+          return json({ ok: false, error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." }, 401);
+        }
+
+        const user = await env.HORUS_USERS.prepare(
+          "SELECT id, first_name, last_name, phone, email, password_hash, password_salt FROM users WHERE email = ? COLLATE NOCASE LIMIT 1"
+        ).bind(email).first();
+
+        if (!user) {
+          // Perform a password hash even for unknown addresses to reduce timing-based account discovery.
+          const dummySalt = new Uint8Array(16);
+          await hashPassword(password, dummySalt);
+          return json({ ok: false, error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." }, 401);
+        }
+
+        const saltText = String(user.password_salt || "").replace(/-/g, "+").replace(/_/g, "/");
+        const saltBytes = Uint8Array.from(atob(saltText + "=".repeat((4 - saltText.length % 4) % 4)), c => c.charCodeAt(0));
+        const submittedHash = await hashPassword(password, saltBytes);
+        const expected = String(user.password_hash || "");
+        let mismatch = submittedHash.length ^ expected.length;
+        const maxLength = Math.max(submittedHash.length, expected.length);
+        for (let i = 0; i < maxLength; i++) {
+          mismatch |= (submittedHash.charCodeAt(i) || 0) ^ (expected.charCodeAt(i) || 0);
+        }
+        if (mismatch !== 0) {
+          return json({ ok: false, error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." }, 401);
+        }
+
+        return json({
+          ok: true,
+          message: "تم تسجيل الدخول بنجاح.",
+          user: {
+            id: user.id,
+            firstName: user.first_name,
+            lastName: user.last_name,
+            phone: user.phone || "",
+            email: user.email
+          }
+        });
+      } catch (error) {
+        console.error("[HorusAuth] Login failed", {
+          errorName: String(error && error.name || "Error"),
+          errorMessage: String(error && error.message || "").slice(0, 200)
+        });
+        return json({ ok: false, error: "تعذر تسجيل الدخول الآن. تحقق من اتصالك وحاول مجددًا." }, 503);
+      }
+    }
+
     if (request.method !== "GET" && request.method !== "POST") {
       return json({ ok: false, error: "Method not allowed" }, 405, { Allow: "GET, POST, OPTIONS" });
     }
