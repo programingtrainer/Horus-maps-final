@@ -27,6 +27,11 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      - name: Prepare high-resolution continent boundaries
+        run: |
+          python3 -m pip install --disable-pip-version-check "shapely>=2.0,<3"
+          python3 scripts/build_continent_boundaries.py
+
       - name: Build debug APK
         run: gradle assembleDebug
 
