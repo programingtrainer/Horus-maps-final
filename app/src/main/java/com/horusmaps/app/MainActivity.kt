@@ -398,7 +398,7 @@ class MainActivity : ComponentActivity() {
                 var profileImageUri by remember { mutableStateOf(accountPrefs.getString("profile_image_uri", null)) }
 
                 fun activateAccount(email: String, firstName: String, lastName: String, phone: String, token: String?) {
-                    val oldImage = savedAccounts.firstOrNull { it.email.equals(email, true) }?.imageUri
+                    val oldImage = HorusAccountStore.profileImage(accountPrefs, email)\n                        ?: savedAccounts.firstOrNull { it.email.equals(email, true) }?.imageUri
                     val account = HorusSavedAccount(email, firstName, lastName, phone, oldImage)
                     HorusAccountStore.saveAccount(accountPrefs, account, token)
                     savedAccounts = HorusAccountStore.accounts(accountPrefs)
@@ -494,12 +494,21 @@ class MainActivity : ComponentActivity() {
                     }
                     accountScope.launch {
                         val result = runCatching { HorusAuthApi.deleteAccountResult(token, password) }.getOrNull()
-                        if (result?.first != true) {
-                            val message = result?.second?.takeIf { it.isNotBlank() } ?: "تعذر حذف الحساب. تحقق من الاتصال وحاول مجددًا."
+                        var deletionConfirmed = result?.first == true
+                        // A response can be lost after the server committed the deletion.
+                        if (!deletionConfirmed && result != null) {
+                            val availability = runCatching {
+                                HorusAuthApi.checkEmail(email.substringBefore("@"))
+                            }.getOrNull()
+                            deletionConfirmed = availability?.available == true
+                        }
+                        if (!deletionConfirmed) {
+                            val message = result?.second?.takeIf { it.isNotBlank() }
+                                ?: "تعذر تأكيد حذف الحساب. تحقق من الاتصال وحاول مجددًا."
                             Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                             return@launch
                         }
-                        HorusAccountStore.removeAccount(accountPrefs, email)
+                        HorusAccountStore.removeAccount(accountPrefs, email, deleteProfile = true)
                         accountPrefs.edit().remove("email").remove("first_name").remove("last_name")
                             .remove("phone").remove("profile_image_uri").putBoolean("onboarding_completed", true).apply()
                         accountEmail = null
