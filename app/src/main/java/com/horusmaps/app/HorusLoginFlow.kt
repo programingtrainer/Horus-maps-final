@@ -59,12 +59,13 @@ private enum class LoginScreen { REDIRECT, FORM, AUTHENTICATING, WELCOME }
 
 @Composable
 fun HorusLoginFlow(
+    initialEmail: String = "",
     onBack: () -> Unit,
     onCreateAccount: () -> Unit,
     onLoginSuccess: (String, String, String, String) -> Unit
 ) {
     var screen by remember { mutableStateOf(LoginScreen.REDIRECT) }
-    var email by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf(initialEmail) }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
