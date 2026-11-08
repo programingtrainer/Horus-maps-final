@@ -497,7 +497,7 @@ class MainActivity : ComponentActivity() {
                         val result = runCatching { HorusAuthApi.deleteAccountResult(token, password) }.getOrNull()
                         var deletionConfirmed = result?.first == true
                         // A response can be lost after the server committed the deletion.
-                        if (!deletionConfirmed && result != null) {
+                        if (!deletionConfirmed) {
                             val availability = runCatching {
                                 HorusAuthApi.checkEmail(email.substringBefore("@"))
                             }.getOrNull()
