@@ -661,6 +661,10 @@ class MainActivity : ComponentActivity() {
                                     showRegistration = false
                                     showWelcomeSheet = true
                                 },
+                                onLoginRequested = {
+                                    showRegistration = false
+                                    showLogin = true
+                                },
                                 onAccountCreated = { email, firstName, lastName, phone ->
                                     accountPrefs.edit()
                                         .putString("email", email)
@@ -699,6 +703,10 @@ class MainActivity : ComponentActivity() {
                                 onBack = {
                                     showLogin = false
                                     showWelcomeSheet = true
+                                },
+                                onCreateAccount = {
+                                    showLogin = false
+                                    showRegistration = true
                                 },
                                 onLoginSuccess = { email, firstName, lastName, phone ->
                                     accountPrefs.edit()
