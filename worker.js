@@ -171,8 +171,18 @@ export default {
           "INSERT INTO users (id, first_name, last_name, phone, email, password_hash, password_salt) VALUES (?, ?, ?, ?, ?, ?, ?)"
         ).bind(userId, firstName, lastName, phone || null, email, passwordHash, saltEncoded).run();
 
-        if (!result.success || result.meta.changes !== 1) {
-          return json({ ok: false, error: "تعذر إنشاء الحساب. حاول مرة أخرى." }, 500);
+        if (!result.success || result.meta?.changes !== 1) {
+          const errorCode = "AUTH_REGISTER_DATABASE_INSERT_NO_CHANGE";
+          console.error("[HorusAuth] Registration insert returned no change", {
+            stage: registerStage,
+            errorCode,
+            changes: result.meta?.changes ?? null
+          });
+          return json({
+            ok: false,
+            error: "تعذر حفظ الحساب في قاعدة البيانات. (رمز: " + errorCode + ")",
+            errorCode
+          }, 500);
         }
 
         return json({
