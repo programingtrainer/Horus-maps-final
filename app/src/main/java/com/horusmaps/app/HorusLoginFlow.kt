@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +17,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Visibility
@@ -56,6 +60,7 @@ private enum class LoginScreen { REDIRECT, FORM, AUTHENTICATING, WELCOME }
 @Composable
 fun HorusLoginFlow(
     onBack: () -> Unit,
+    onCreateAccount: () -> Unit,
     onLoginSuccess: (String, String, String, String) -> Unit
 ) {
     var screen by remember { mutableStateOf(LoginScreen.REDIRECT) }
@@ -109,7 +114,7 @@ fun HorusLoginFlow(
     androidx.compose.runtime.CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Box(
             Modifier.fillMaxSize().background(
-                Brush.verticalGradient(listOf(Color(0xFF07182B), Color(0xFF102D4B), Color(0xFF07182B)))
+                Brush.verticalGradient(listOf(Color(0xFF071A30), Color(0xFF0B3C64), Color(0xFFF3F7FC)))
             ),
             contentAlignment = Alignment.Center
         ) {
@@ -134,85 +139,54 @@ fun HorusLoginFlow(
                     )
                     LoginScreen.FORM -> {
                         Column(
-                            Modifier.fillMaxSize().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 18.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                            Modifier.fillMaxSize().navigationBarsPadding()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 20.dp, vertical = 18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(onClick = onBack) {
                                     Icon(Icons.Default.ArrowBack, contentDescription = "رجوع", tint = Color.White)
                                 }
-                                Text("تسجيل الدخول", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.weight(1f))
+                                Text("HORUS", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
+                                Spacer(Modifier.weight(1f))
+                                Box(Modifier.size(48.dp))
                             }
-                            Spacer(Modifier.height(18.dp))
-                            Card(
-                                Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(28.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color.White),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
-                            ) {
-                                Column(
-                                    Modifier.fillMaxWidth().padding(24.dp),
-                                    verticalArrangement = Arrangement.spacedBy(15.dp)
-                                ) {
-                                    Text("أهلًا بعودتك إلى HorusMaps", color = Color(0xFF172B45), fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                                    Text("سجّل الدخول باستخدام بريد Horus وكلمة المرور الخاصة بحسابك.", color = Color(0xFF718096), fontSize = 12.sp, lineHeight = 19.sp)
-                                    OutlinedTextField(
-                                        value = email,
-                                        onValueChange = { email = it.trim().replace(" ", ""); errorMessage = "" },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        label = { Text("البريد الإلكتروني") },
-                                        placeholder = { Text("username@horus.com") },
-                                        singleLine = true,
-                                        shape = RoundedCornerShape(14.dp),
-                                        colors = loginFieldColors()
-                                    )
-                                    Text(
-                                        "يجب أن ينتهي البريد بـ @horus.com",
-                                        color = if (email.isBlank() || emailValid) Color(0xFF8492A5) else Color(0xFFD34C55),
-                                        fontSize = 10.sp
-                                    )
-                                    OutlinedTextField(
-                                        value = password,
-                                        onValueChange = { password = it; errorMessage = "" },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        label = { Text("كلمة المرور") },
-                                        singleLine = true,
-                                        shape = RoundedCornerShape(14.dp),
-                                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                                        trailingIcon = {
-                                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                                Icon(
-                                                    if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                                    contentDescription = if (passwordVisible) "إخفاء كلمة المرور" else "إظهار كلمة المرور",
-                                                    tint = Color(0xFF60748B)
-                                                )
-                                            }
-                                        },
-                                        colors = loginFieldColors()
-                                    )
-                                    if (errorMessage.isNotBlank()) {
-                                        Text(errorMessage, color = Color(0xFFD34C55), fontSize = 12.sp, lineHeight = 18.sp)
-                                    }
-                                    Button(
-                                        onClick = {
-                                            errorMessage = ""
-                                            screen = LoginScreen.AUTHENTICATING
-                                        },
-                                        enabled = emailValid && password.isNotEmpty(),
-                                        modifier = Modifier.fillMaxWidth().height(54.dp),
-                                        shape = RoundedCornerShape(16.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFF087FE5),
-                                            disabledContainerColor = Color(0xFFB8C9D9)
-                                        )
-                                    ) {
+                            Spacer(Modifier.height(12.dp))
+                            Box(Modifier.size(58.dp).background(Color.White.copy(alpha = 0.13f), CircleShape), contentAlignment = Alignment.Center) {
+                                Text("𓅃", color = Color(0xFFFFD27A), fontSize = 31.sp)
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Text("تسجيل الدخول", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(6.dp))
+                            Text("أهلًا بعودتك إلى HorusMaps، سجّل الدخول لمتابعة رحلتك.", color = Color.White.copy(alpha = 0.78f), fontSize = 13.sp, textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(22.dp))
+                            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(14.dp)) {
+                                Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                                    Text("بيانات حسابك", color = Color(0xFF172B45), fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                                    Text("استخدم بريد Horus وكلمة المرور اللذين أنشأت بهما حسابك.", color = Color(0xFF7B8797), fontSize = 12.sp)
+                                    OutlinedTextField(value = email, onValueChange = { email = it.trim().replace(" ", ""); errorMessage = "" }, modifier = Modifier.fillMaxWidth(), label = { Text("البريد الإلكتروني") }, placeholder = { Text("username@horus.com") }, singleLine = true, shape = RoundedCornerShape(14.dp), colors = loginFieldColors())
+                                    Text("يجب أن ينتهي البريد بـ @horus.com", color = if (email.isBlank() || emailValid) Color(0xFF8492A5) else Color(0xFFD34C55), fontSize = 10.sp)
+                                    OutlinedTextField(value = password, onValueChange = { password = it; errorMessage = "" }, modifier = Modifier.fillMaxWidth(), label = { Text("كلمة المرور") }, singleLine = true, shape = RoundedCornerShape(14.dp), visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(), trailingIcon = {
+                                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                            Icon(if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, contentDescription = if (passwordVisible) "إخفاء كلمة المرور" else "إظهار كلمة المرور", tint = Color(0xFF60748B))
+                                        }
+                                    }, colors = loginFieldColors())
+                                    if (errorMessage.isNotBlank()) Text(errorMessage, color = Color(0xFFD34C55), fontSize = 12.sp, lineHeight = 18.sp)
+                                    Button(onClick = { errorMessage = ""; screen = LoginScreen.AUTHENTICATING }, enabled = emailValid && password.isNotEmpty(), modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087FE5), disabledContainerColor = Color(0xFFB8C9D9))) {
                                         Text("تسجيل الدخول", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                     }
                                 }
                             }
-                            Spacer(Modifier.height(18.dp))
-                            Text("HORUS MAPS  •  YOUR WORLD, YOUR WAY", color = Color.White.copy(alpha = 0.62f), fontSize = 9.sp, letterSpacing = 1.sp)
+                            Spacer(Modifier.height(16.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("ليس لديك حساب؟ ", color = Color(0xFF38516B), fontSize = 13.sp)
+                                Text("إنشاء حساب", color = Color(0xFF087FE5), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(onClick = onCreateAccount).padding(4.dp))
+                            }
+                            Spacer(Modifier.height(14.dp))
+                            Text("HORUS MAPS  •  EXPLORE WITHOUT LIMITS", color = Color(0xFF38516B).copy(alpha = 0.72f), fontSize = 9.sp, letterSpacing = 1.sp)
+                            Spacer(Modifier.height(14.dp))
                         }
                     }
                 }
