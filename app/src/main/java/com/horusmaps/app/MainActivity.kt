@@ -40,6 +40,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -362,8 +364,19 @@ class MainActivity : ComponentActivity() {
                 val mapInitializationRequested = remember { mutableStateOf(false) }
                 var mapLibreMap by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
                 var remoteConfig by remember { mutableStateOf(HorusRemoteConfig.loadCached(this@MainActivity)) }
-                var showWelcomeSheet by remember { mutableStateOf(remoteConfig.showWelcomePanel) }
+                val accountPrefs = remember { getSharedPreferences("horus_account", MODE_PRIVATE) }
+                var accountEmail by remember { mutableStateOf(accountPrefs.getString("email", null)) }
+                var hasCompletedOnboarding by remember {
+                    mutableStateOf(
+                        accountPrefs.getBoolean("onboarding_completed", false) ||
+                            !accountEmail.isNullOrBlank()
+                    )
+                }
+                var showWelcomeSheet by remember {
+                    mutableStateOf(!hasCompletedOnboarding && remoteConfig.showWelcomePanel)
+                }
                 var showRegistration by remember { mutableStateOf(false) }
+                var showProfile by remember { mutableStateOf(false) }
                 var is3DMode by remember { mutableStateOf(remoteConfig.showBuildings3D && remoteConfig.initialZoom >= 14.0) }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                     val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
@@ -409,7 +422,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(remoteConfig) {
-                    showWelcomeSheet = remoteConfig.showWelcomePanel
+                    if (!hasCompletedOnboarding) showWelcomeSheet = remoteConfig.showWelcomePanel
                     val map = mapLibreMap
                     if (map != null) {
                         map.setStyle(Style.Builder().fromUri(remoteConfig.styleUrl)) { style ->
@@ -430,7 +443,7 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(Unit) {
                     delay(450)
-                    showWelcomeSheet = remoteConfig.showWelcomePanel
+                    if (!hasCompletedOnboarding) showWelcomeSheet = remoteConfig.showWelcomePanel
                 }
 
                 Surface(
@@ -508,6 +521,31 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
+                        if (!accountEmail.isNullOrBlank()) {
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .statusBarsPadding()
+                                    .padding(top = 12.dp, end = 18.dp)
+                                    .size(50.dp),
+                                shape = androidx.compose.foundation.shape.CircleShape,
+                                color = Color.White,
+                                shadowElevation = 8.dp
+                            ) {
+                                androidx.compose.material3.IconButton(
+                                    onClick = { showProfile = true },
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.AccountCircle,
+                                        contentDescription = "الملف الشخصي",
+                                        tint = Color(0xFF087FE5),
+                                        modifier = Modifier.size(31.dp)
+                                    )
+                                }
+                            }
+                        }
+
                         if (remoteConfig.currentLocation) {
                             Surface(
                                 modifier = Modifier
@@ -532,6 +570,16 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
+                        if (showProfile) {
+                            ProfilePanel(
+                                firstName = accountPrefs.getString("first_name", "").orEmpty(),
+                                lastName = accountPrefs.getString("last_name", "").orEmpty(),
+                                email = accountEmail.orEmpty(),
+                                phone = accountPrefs.getString("phone", "").orEmpty(),
+                                onDismiss = { showProfile = false }
+                            )
+                        }
+
                         AnimatedVisibility(
                             visible = showWelcomeSheet,
                             modifier = Modifier
@@ -591,11 +639,16 @@ class MainActivity : ComponentActivity() {
                                     showRegistration = false
                                     showWelcomeSheet = true
                                 },
-                                onAccountCreated = { email ->
-                                    getSharedPreferences("horus_account", MODE_PRIVATE)
-                                        .edit()
+                                onAccountCreated = { email, firstName, lastName, phone ->
+                                    accountPrefs.edit()
                                         .putString("email", email)
+                                        .putString("first_name", firstName)
+                                        .putString("last_name", lastName)
+                                        .putString("phone", phone)
+                                        .putBoolean("onboarding_completed", true)
                                         .apply()
+                                    accountEmail = email
+                                    hasCompletedOnboarding = true
                                     showRegistration = false
                                     showWelcomeSheet = false
                                     Toast.makeText(
@@ -631,6 +684,121 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun ProfilePanel(
+    firstName: String,
+    lastName: String,
+    email: String,
+    phone: String,
+    onDismiss: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0x99071324)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = Color.White,
+            shadowElevation = 22.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "الملف الشخصي",
+                        modifier = Modifier.weight(1f),
+                        color = Color(0xFF172B45),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    androidx.compose.material3.IconButton(onClick = onDismiss) {
+                        Icon(Icons.Filled.Close, contentDescription = "إغلاق", tint = Color(0xFF64748B))
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Box(
+                    modifier = Modifier
+                        .size(82.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(Color(0xFFEAF3FC)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        (firstName.firstOrNull()?.uppercaseChar()?.toString() ?: "H") +
+                            (lastName.firstOrNull()?.uppercaseChar()?.toString() ?: ""),
+                        color = Color(0xFF087FE5),
+                        fontSize = 27.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ").ifBlank { "مستخدم HorusMaps" },
+                    color = Color(0xFF172B45),
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text("حساب HorusMaps", color = Color(0xFF8290A2), fontSize = 12.sp)
+                Spacer(Modifier.height(22.dp))
+                ProfileInfoRow("البريد الإلكتروني", email)
+                if (phone.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    ProfileInfoRow("رقم الهاتف", phone)
+                }
+                Spacer(Modifier.height(18.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFFEAF8F1)
+                ) {
+                    Text(
+                        "✓  حسابك مُفعّل على هذا الجهاز",
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        color = Color(0xFF16845B),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(Modifier.height(18.dp))
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(15.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087FE5))
+                ) {
+                    Text("تم", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun ProfileInfoRow(label: String, value: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFFF4F7FB))
+            .padding(horizontal = 14.dp, vertical = 11.dp)
+    ) {
+        Text(label, color = Color(0xFF7B8797), fontSize = 11.sp)
+        Spacer(Modifier.height(4.dp))
+        Text(value, color = Color(0xFF26364A), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
