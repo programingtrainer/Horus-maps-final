@@ -397,8 +397,19 @@ class MainActivity : ComponentActivity() {
                 var showProfile by remember { mutableStateOf(false) }
                 var profileImageUri by remember { mutableStateOf(accountPrefs.getString("profile_image_uri", null)) }
 
-                fun activateAccount(email: String, firstName: String, lastName: String, phone: String, token: String?) {
-                    val oldImage = HorusAccountStore.profileImage(accountPrefs, email)
+                fun activateAccount(
+                    email: String,
+                    firstName: String,
+                    lastName: String,
+                    phone: String,
+                    token: String?,
+                    profileImageData: String? = null
+                ) {
+                    val cloudImageUri = profileImageData?.let {
+                        HorusProfileImageStore.saveBase64(this@MainActivity, email, it)
+                    }
+                    val oldImage = cloudImageUri
+                        ?: HorusAccountStore.profileImage(accountPrefs, email)
                         ?: savedAccounts.firstOrNull { it.email.equals(email, true) }?.imageUri
                     val account = HorusSavedAccount(email, firstName, lastName, phone, oldImage)
                     HorusAccountStore.saveAccount(accountPrefs, account, token)
@@ -421,6 +432,34 @@ class MainActivity : ComponentActivity() {
                     showProfile = false
                     pendingLoginEmail = ""
                     authReturnToProfile = false
+
+                    // Older installs may have a local-only image. Upload it once after
+                    // login if the account does not yet have a cloud copy.
+                    if (!token.isNullOrBlank() && profileImageData.isNullOrBlank()) {
+                        accountScope.launch {
+                            val remote = runCatching { HorusAuthApi.currentUser(token) }.getOrNull()
+                            if (remote?.success == true && accountEmail.equals(email, true)) {
+                                if (!remote.profileImageData.isNullOrBlank()) {
+                                    val restored = HorusProfileImageStore.saveBase64(
+                                        this@MainActivity, email, remote.profileImageData
+                                    )
+                                    if (restored != null) {
+                                        HorusAccountStore.updateImage(accountPrefs, email, restored)
+                                        accountPrefs.edit().putString("profile_image_uri", restored).apply()
+                                        profileImageUri = restored
+                                        savedAccounts = HorusAccountStore.accounts(accountPrefs)
+                                    }
+                                } else if (!oldImage.isNullOrBlank()) {
+                                    val encoded = HorusProfileImageStore.encodeJpeg(
+                                        this@MainActivity, android.net.Uri.parse(oldImage)
+                                    )
+                                    if (!encoded.isNullOrBlank()) {
+                                        runCatching { HorusAuthApi.uploadProfileImage(token, encoded) }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 fun openAddAccount() {
@@ -445,7 +484,7 @@ class MainActivity : ComponentActivity() {
                     accountScope.launch {
                         val result = runCatching { HorusAuthApi.currentUser(token) }.getOrNull()
                         if (result?.success == true) {
-                            activateAccount(result.email.orEmpty(), result.firstName, result.lastName, result.phone, token)
+                            activateAccount(result.email.orEmpty(), result.firstName, result.lastName, result.phone, token, result.profileImageData)
                             Toast.makeText(this@MainActivity, "تم التبديل إلى ${result.email}", Toast.LENGTH_SHORT).show()
                         } else {
                             HorusAccountStore.clearToken(accountPrefs, email)
@@ -456,6 +495,59 @@ class MainActivity : ComponentActivity() {
                             Toast.makeText(this@MainActivity, "سجّل الدخول إلى هذا الحساب مرة أخرى.", Toast.LENGTH_LONG).show()
                         }
                     }
+                }
+
+                suspend fun activateNextAvailableAccount(excludedEmail: String): Boolean {
+                    val candidates = HorusAccountStore.accounts(accountPrefs)
+                        .filterNot { it.email.equals(excludedEmail, true) }
+
+                    // Prefer another account whose saved server session is still valid.
+                    for (candidate in candidates) {
+                        val savedToken = HorusAccountStore.token(accountPrefs, candidate.email)
+                        if (savedToken.isNullOrBlank()) continue
+                        val result = runCatching { HorusAuthApi.currentUser(savedToken) }.getOrNull()
+                        if (result?.success == true) {
+                            activateAccount(
+                                result.email.orEmpty(), result.firstName, result.lastName,
+                                result.phone, savedToken, result.profileImageData
+                            )
+                            Toast.makeText(
+                                this@MainActivity,
+                                "تم فتح الحساب الآخر: ${result.email}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            return true
+                        }
+                        HorusAccountStore.clearToken(accountPrefs, candidate.email)
+                    }
+
+                    // If another account exists but needs authentication, open its login
+                    // instead of silently dropping the user into guest mode.
+                    val remaining = HorusAccountStore.accounts(accountPrefs)
+                    if (remaining.isNotEmpty()) {
+                        pendingLoginEmail = remaining.first().email
+                        authReturnToProfile = false
+                        showProfile = false
+                        showWelcomeSheet = false
+                        showRegistration = false
+                        showLogin = true
+                        Toast.makeText(
+                            this@MainActivity,
+                            "الحساب الآخر موجود؛ سجّل الدخول إليه للمتابعة.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return true
+                    }
+
+                    accountEmail = null
+                    profileImageUri = null
+                    isGuestMode = true
+                    hasCompletedOnboarding = true
+                    showProfile = false
+                    showLogin = false
+                    showRegistration = false
+                    showWelcomeSheet = false
+                    return false
                 }
 
                 fun logoutCurrentAccount() {
@@ -471,14 +563,20 @@ class MainActivity : ComponentActivity() {
                         }
                         HorusAccountStore.removeAccount(accountPrefs, email, deleteProfile = false)
                         accountPrefs.edit().remove("email").remove("first_name").remove("last_name")
-                            .remove("phone").remove("profile_image_uri").putBoolean("onboarding_completed", true).apply()
+                            .remove("phone").remove("profile_image_uri")
+                            .putBoolean("onboarding_completed", true).apply()
                         accountEmail = null
                         profileImageUri = null
-                        isGuestMode = true
-                        hasCompletedOnboarding = true
                         savedAccounts = HorusAccountStore.accounts(accountPrefs)
                         showProfile = false
-                        Toast.makeText(this@MainActivity, "تم تسجيل الخروج بنجاح.", Toast.LENGTH_SHORT).show()
+                        val switched = activateNextAvailableAccount(email)
+                        if (!switched) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "تم تسجيل الخروج. لا توجد حسابات أخرى، أنت الآن في وضع الضيف.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
                     }
                 }
 
@@ -509,16 +607,23 @@ class MainActivity : ComponentActivity() {
                             Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                             return@launch
                         }
+                        HorusProfileImageStore.deleteLocal(this@MainActivity, email)
                         HorusAccountStore.removeAccount(accountPrefs, email, deleteProfile = true)
                         accountPrefs.edit().remove("email").remove("first_name").remove("last_name")
-                            .remove("phone").remove("profile_image_uri").putBoolean("onboarding_completed", true).apply()
+                            .remove("phone").remove("profile_image_uri")
+                            .putBoolean("onboarding_completed", true).apply()
                         accountEmail = null
                         profileImageUri = null
-                        isGuestMode = true
-                        hasCompletedOnboarding = true
                         savedAccounts = HorusAccountStore.accounts(accountPrefs)
                         showProfile = false
-                        Toast.makeText(this@MainActivity, "تم حذف الحساب نهائيًا.", Toast.LENGTH_LONG).show()
+                        val switched = activateNextAvailableAccount(email)
+                        if (!switched) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "تم حذف الحساب نهائيًا. لا توجد حسابات أخرى، أنت الآن في وضع الضيف.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
                 }
 
@@ -541,16 +646,41 @@ class MainActivity : ComponentActivity() {
                 var is3DMode by remember { mutableStateOf(remoteConfig.showBuildings3D && remoteConfig.initialZoom >= 14.0) }
                 val profileImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) {
-                        runCatching {
-                            contentResolver.takePersistableUriPermission(
-                                uri,
-                                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            )
+                        val email = accountEmail
+                        val token = email?.let { HorusAccountStore.token(accountPrefs, it) }
+                        if (email.isNullOrBlank() || token.isNullOrBlank()) {
+                            Toast.makeText(this@MainActivity, "سجّل الدخول لحفظ صورة حسابك على السحابة.", Toast.LENGTH_LONG).show()
+                        } else {
+                            accountScope.launch {
+                                val encoded = HorusProfileImageStore.encodeJpeg(this@MainActivity, uri)
+                                if (encoded.isNullOrBlank()) {
+                                    Toast.makeText(this@MainActivity, "تعذر قراءة الصورة. اختر صورة أخرى.", Toast.LENGTH_LONG).show()
+                                } else {
+                                    val uploaded = runCatching {
+                                        HorusAuthApi.uploadProfileImage(token, encoded)
+                                    }.getOrNull()
+                                    if (uploaded?.first != true) {
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            uploaded?.second?.takeIf { it.isNotBlank() }
+                                                ?: "تعذر حفظ الصورة على السحابة. حاول مرة أخرى.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    } else {
+                                        val savedUri = HorusProfileImageStore.saveBase64(
+                                            this@MainActivity, email, "data:image/jpeg;base64,$encoded"
+                                        )
+                                        if (savedUri != null && accountEmail.equals(email, true)) {
+                                            profileImageUri = savedUri
+                                            accountPrefs.edit().putString("profile_image_uri", savedUri).apply()
+                                            HorusAccountStore.updateImage(accountPrefs, email, savedUri)
+                                            savedAccounts = HorusAccountStore.accounts(accountPrefs)
+                                            Toast.makeText(this@MainActivity, "تم حفظ صورة حسابك على السحابة.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        profileImageUri = uri.toString()
-                        accountPrefs.edit().putString("profile_image_uri", uri.toString()).apply()
-                        accountEmail?.let { HorusAccountStore.updateImage(accountPrefs, it, uri.toString()) }
-                        savedAccounts = HorusAccountStore.accounts(accountPrefs)
                     }
                 }
                 val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
