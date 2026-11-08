@@ -398,7 +398,8 @@ class MainActivity : ComponentActivity() {
                 var profileImageUri by remember { mutableStateOf(accountPrefs.getString("profile_image_uri", null)) }
 
                 fun activateAccount(email: String, firstName: String, lastName: String, phone: String, token: String?) {
-                    val oldImage = HorusAccountStore.profileImage(accountPrefs, email)\n                        ?: savedAccounts.firstOrNull { it.email.equals(email, true) }?.imageUri
+                    val oldImage = HorusAccountStore.profileImage(accountPrefs, email)
+                        ?: savedAccounts.firstOrNull { it.email.equals(email, true) }?.imageUri
                     val account = HorusSavedAccount(email, firstName, lastName, phone, oldImage)
                     HorusAccountStore.saveAccount(accountPrefs, account, token)
                     savedAccounts = HorusAccountStore.accounts(accountPrefs)
