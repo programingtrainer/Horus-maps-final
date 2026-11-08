@@ -805,6 +805,9 @@ class MainActivity : ComponentActivity() {
                                     mapInitializationRequested.value = true
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
+                                        // Keep the map data/source credits visible, but replace the MapLibre brand mark
+                                        // with HorusMaps branding in the app UI.
+                                        map.uiSettings.setLogoEnabled(false)
                                         val mapViewportWidthPx = resources.displayMetrics.widthPixels.toDouble()
                                         val singleWorldMinZoom = (
                                             kotlin.math.ln(mapViewportWidthPx / 512.0) / kotlin.math.ln(2.0) + 0.12
@@ -847,6 +850,28 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         )
+
+                        // Subtle HorusMaps signature. Native map/source attribution remains enabled.
+                        Surface(
+                            modifier = Modifier
+                                .align(androidx.compose.ui.AbsoluteAlignment.BottomRight)
+                                .navigationBarsPadding()
+                                .padding(
+                                    end = 18.dp,
+                                    bottom = if (remoteConfig.currentLocation) 166.dp else 96.dp
+                                ),
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color.White.copy(alpha = 0.96f),
+                            shadowElevation = 5.dp
+                        ) {
+                            Text(
+                                text = "HorusMaps",
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                color = Color(0xFF172033),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
 
                         Column(
                             modifier = Modifier
