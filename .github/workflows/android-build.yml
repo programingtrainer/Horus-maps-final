@@ -32,8 +32,30 @@ jobs:
           python3 -m pip install --disable-pip-version-check "shapely>=2.0,<3"
           python3 scripts/build_continent_boundaries.py
 
-      - name: Build debug APK
-        run: gradle assembleDebug
+      - name: Build debug APK with transient dependency retry
+        shell: bash
+        run: |
+          set -o pipefail
+          for attempt in 1 2 3; do
+            echo "Gradle build attempt ${attempt}/3"
+            if gradle assembleDebug 2>&1 | tee gradle-build.log; then
+              exit 0
+            fi
+
+            if ! grep -Eqi 'HTTP (502|503|504)|status code (502|503|504)|Gateway Timeout|Read timed out|Connection timed out|Could not (GET|HEAD)' gradle-build.log; then
+              echo "Build failed for a non-transient reason; stopping without retry."
+              exit 1
+            fi
+
+            if [ "${attempt}" -lt 3 ]; then
+              delay=$((attempt * 20))
+              echo "Detected a transient dependency/network failure. Retrying in ${delay}s..."
+              sleep "${delay}"
+            fi
+          done
+
+          echo "Gradle build failed after 3 attempts."
+          exit 1
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
