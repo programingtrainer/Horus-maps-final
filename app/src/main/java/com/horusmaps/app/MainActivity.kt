@@ -605,7 +605,12 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        if (showProfile) {
+                        AnimatedVisibility(
+                            visible = showProfile,
+                            modifier = Modifier.fillMaxSize(),
+                            enter = fadeIn(tween(220)),
+                            exit = fadeOut(tween(180))
+                        ) {
                             ProfilePanel(
                                 firstName = accountPrefs.getString("first_name", "").orEmpty(),
                                 lastName = accountPrefs.getString("last_name", "").orEmpty(),
