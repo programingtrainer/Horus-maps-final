@@ -87,14 +87,12 @@ object HorusAuthApi {
         response.first in 200..299 && response.second.optBoolean("ok")
     }
 
-    suspend fun deleteAccount(token: String, password: String): Boolean = withContext(Dispatchers.IO) {
-        val response = post("/v1/auth/delete-account", JSONObject().put("password", password), token)
-        response.first in 200..299 && response.second.optBoolean("ok")
-    }
-
     suspend fun deleteAccountResult(token: String, password: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val response = post("/v1/auth/delete-account", JSONObject().put("password", password), token)
-        response.first in 200..299 && response.second.optBoolean("ok") to response.second.optString("error")
+        Pair(
+            response.first in 200..299 && response.second.optBoolean("ok"),
+            response.second.optString("error")
+        )
     }
 
     private fun post(path: String, body: JSONObject, bearerToken: String? = null): Pair<Int, JSONObject> {
