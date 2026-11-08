@@ -138,10 +138,9 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
             )
         }
 
-        // At world scale, continent polygons are an opaque thematic layer.
-        // This deliberately masks the country-level cartography underneath,
-        // instead of merely tinting it and leaving country borders visible.
-        // Both visual levels cross-fade smoothly through the intermediate zooms.
+        // At world scale, preserve the basemap's natural land and ocean appearance.
+        // Country borders/labels fade out while continent outlines remain visible.
+        // Country detail fades back in smoothly as the user zooms closer.
         val continentOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
             org.maplibre.android.style.expressions.Expression.linear(),
             org.maplibre.android.style.expressions.Expression.zoom(),
@@ -150,33 +149,9 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
             org.maplibre.android.style.expressions.Expression.stop(2.9, 0.55),
             org.maplibre.android.style.expressions.Expression.stop(3.7, 0.0)
         )
-        val continentFillOpacity = org.maplibre.android.style.expressions.Expression.interpolate(
-            org.maplibre.android.style.expressions.Expression.linear(),
-            org.maplibre.android.style.expressions.Expression.zoom(),
-            org.maplibre.android.style.expressions.Expression.stop(0.0, 1.0),
-            org.maplibre.android.style.expressions.Expression.stop(2.0, 1.0),
-            org.maplibre.android.style.expressions.Expression.stop(2.9, 0.55),
-            org.maplibre.android.style.expressions.Expression.stop(3.7, 0.0)
-        )
-
         val firstSymbolLayerId = style.layers
             .filterIsInstance<org.maplibre.android.style.layers.SymbolLayer>()
             .firstOrNull()?.id
-
-        if (style.getLayer("horus-continent-fill") == null) {
-            val fill = org.maplibre.android.style.layers.FillLayer(
-                "horus-continent-fill",
-                "horus-continent-shapes"
-            ).apply {
-                minZoom = 0.0f
-                maxZoom = 3.46f
-                setProperties(
-                    org.maplibre.android.style.layers.PropertyFactory.fillColor("#7898B5"),
-                    org.maplibre.android.style.layers.PropertyFactory.fillOpacity(continentFillOpacity)
-                )
-            }
-            if (firstSymbolLayerId != null) style.addLayerBelow(fill, firstSymbolLayerId) else style.addLayer(fill)
-        }
 
         if (style.getLayer("horus-continent-outline") == null) {
             val outline = org.maplibre.android.style.layers.LineLayer(
@@ -186,8 +161,17 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
                 minZoom = 0.0f
                 maxZoom = 3.46f
                 setProperties(
-                    org.maplibre.android.style.layers.PropertyFactory.lineColor("#536F88"),
-                    org.maplibre.android.style.layers.PropertyFactory.lineWidth(1.15f),
+                    // Natural land/water colors remain untouched; draw only the continent edges.
+                    org.maplibre.android.style.layers.PropertyFactory.lineColor("#526575"),
+                    org.maplibre.android.style.layers.PropertyFactory.lineWidth(
+                        org.maplibre.android.style.expressions.Expression.interpolate(
+                            org.maplibre.android.style.expressions.Expression.linear(),
+                            org.maplibre.android.style.expressions.Expression.zoom(),
+                            org.maplibre.android.style.expressions.Expression.stop(0.0, 0.85),
+                            org.maplibre.android.style.expressions.Expression.stop(2.0, 1.15),
+                            org.maplibre.android.style.expressions.Expression.stop(3.46, 1.65)
+                        )
+                    ),
                     org.maplibre.android.style.layers.PropertyFactory.lineOpacity(continentOpacity)
                 )
             }
