@@ -125,7 +125,7 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
         )
     }
 
-    // Seven dissolved terrestrial continent geometries generated from Natural Earth 1:110m.
+    // Seven dissolved terrestrial continent geometries generated from Natural Earth 1:50m.
     // Country polygons are merged by shared edges, so ocean partition lines are never drawn.
     runCatching {
         val continentGeoJson = context.assets.open("continents.geojson").bufferedReader().use { it.readText() }
@@ -166,29 +166,29 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
                         org.maplibre.android.style.expressions.Expression.match(
                             org.maplibre.android.style.expressions.Expression.get("continent"),
                             org.maplibre.android.style.expressions.Expression.literal("Africa"),
-                            org.maplibre.android.style.expressions.Expression.literal("#C58A52"),
+                            org.maplibre.android.style.expressions.Expression.literal("#F4A261"),
                             org.maplibre.android.style.expressions.Expression.literal("Asia"),
-                            org.maplibre.android.style.expressions.Expression.literal("#C87968"),
+                            org.maplibre.android.style.expressions.Expression.literal("#E63946"),
                             org.maplibre.android.style.expressions.Expression.literal("Europe"),
-                            org.maplibre.android.style.expressions.Expression.literal("#6F91B7"),
+                            org.maplibre.android.style.expressions.Expression.literal("#4361EE"),
                             org.maplibre.android.style.expressions.Expression.literal("North America"),
-                            org.maplibre.android.style.expressions.Expression.literal("#5F9A9A"),
+                            org.maplibre.android.style.expressions.Expression.literal("#2A9D8F"),
                             org.maplibre.android.style.expressions.Expression.literal("South America"),
-                            org.maplibre.android.style.expressions.Expression.literal("#8B79B8"),
+                            org.maplibre.android.style.expressions.Expression.literal("#9B5DE5"),
                             org.maplibre.android.style.expressions.Expression.literal("Oceania"),
-                            org.maplibre.android.style.expressions.Expression.literal("#B27A9A"),
+                            org.maplibre.android.style.expressions.Expression.literal("#D946A6"),
                             org.maplibre.android.style.expressions.Expression.literal("Antarctica"),
-                            org.maplibre.android.style.expressions.Expression.literal("#8798A8"),
-                            org.maplibre.android.style.expressions.Expression.literal("#526575")
+                            org.maplibre.android.style.expressions.Expression.literal("#00A6D6"),
+                            org.maplibre.android.style.expressions.Expression.literal("#263238")
                         )
                     ),
                     org.maplibre.android.style.layers.PropertyFactory.lineWidth(
                         org.maplibre.android.style.expressions.Expression.interpolate(
                             org.maplibre.android.style.expressions.Expression.linear(),
                             org.maplibre.android.style.expressions.Expression.zoom(),
-                            org.maplibre.android.style.expressions.Expression.stop(0.0, 0.85),
-                            org.maplibre.android.style.expressions.Expression.stop(2.0, 1.15),
-                            org.maplibre.android.style.expressions.Expression.stop(3.46, 1.65)
+                            org.maplibre.android.style.expressions.Expression.stop(0.0, 1.15),
+                            org.maplibre.android.style.expressions.Expression.stop(2.0, 1.55),
+                            org.maplibre.android.style.expressions.Expression.stop(3.46, 2.05)
                         )
                     ),
                     org.maplibre.android.style.layers.PropertyFactory.lineOpacity(continentOpacity)
