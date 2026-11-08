@@ -485,7 +485,11 @@ class MainActivity : ComponentActivity() {
                     val email = accountEmail ?: return
                     val token = HorusAccountStore.token(accountPrefs, email)
                     if (token.isNullOrBlank()) {
-                        Toast.makeText(this@MainActivity, "سجّل الدخول مرة أخرى قبل حذف الحساب.", Toast.LENGTH_LONG).show()
+                        authReturnToProfile = true
+                        pendingLoginEmail = email
+                        showProfile = false
+                        showLogin = true
+                        Toast.makeText(this@MainActivity, "سجّل الدخول مرة أخرى لتأكيد ملكية الحساب قبل الحذف.", Toast.LENGTH_LONG).show()
                         return
                     }
                     accountScope.launch {
