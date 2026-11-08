@@ -481,7 +481,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                fun deleteCurrentAccount() {
+                fun deleteCurrentAccount(password: String) {
                     val email = accountEmail ?: return
                     val token = HorusAccountStore.token(accountPrefs, email)
                     if (token.isNullOrBlank()) {
@@ -489,9 +489,10 @@ class MainActivity : ComponentActivity() {
                         return
                     }
                     accountScope.launch {
-                        val success = runCatching { HorusAuthApi.deleteAccount(token) }.getOrDefault(false)
-                        if (!success) {
-                            Toast.makeText(this@MainActivity, "تعذر حذف الحساب. تحقق من الاتصال وحاول مجددًا.", Toast.LENGTH_LONG).show()
+                        val result = runCatching { HorusAuthApi.deleteAccountResult(token, password) }.getOrNull()
+                        if (result?.first != true) {
+                            val message = result?.second?.takeIf { it.isNotBlank() } ?: "تعذر حذف الحساب. تحقق من الاتصال وحاول مجددًا."
+                            Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                             return@launch
                         }
                         HorusAccountStore.removeAccount(accountPrefs, email)
@@ -765,7 +766,7 @@ class MainActivity : ComponentActivity() {
                                 onAddAccount = { openAddAccount() },
                                 onSwitchAccount = { email -> switchToAccount(email) },
                                 onLogout = { logoutCurrentAccount() },
-                                onDeleteAccount = { deleteCurrentAccount() },
+                                onDeleteAccount = { password -> deleteCurrentAccount(password) },
                                 onToggle3D = { enabled -> changeMapMode(enabled) }
                             )
                         }
