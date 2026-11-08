@@ -20,7 +20,12 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -372,6 +377,12 @@ class MainActivity : ComponentActivity() {
                             !accountEmail.isNullOrBlank()
                     )
                 }
+                var isGuestMode by remember {
+                    mutableStateOf(
+                        accountEmail.isNullOrBlank() &&
+                            accountPrefs.getBoolean("onboarding_completed", false)
+                    )
+                }
                 var showWelcomeSheet by remember {
                     mutableStateOf(!hasCompletedOnboarding && remoteConfig.showWelcomePanel)
                 }
@@ -521,27 +532,37 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        if (!accountEmail.isNullOrBlank()) {
-                            Surface(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .statusBarsPadding()
-                                    .padding(top = 12.dp, end = 18.dp)
-                                    .size(50.dp),
-                                shape = androidx.compose.foundation.shape.CircleShape,
-                                color = Color.White,
-                                shadowElevation = 8.dp
-                            ) {
-                                androidx.compose.material3.IconButton(
-                                    onClick = { showProfile = true },
-                                    modifier = Modifier.fillMaxSize()
+                        if (isGuestMode || !accountEmail.isNullOrBlank()) {
+                            if (isGuestMode) {
+                                GuestAccessProfileButton(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .statusBarsPadding()
+                                        .padding(top = 12.dp, end = 18.dp),
+                                    onClick = { showWelcomeSheet = true }
+                                )
+                            } else {
+                                Surface(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .statusBarsPadding()
+                                        .padding(top = 12.dp, end = 18.dp)
+                                        .size(50.dp),
+                                    shape = androidx.compose.foundation.shape.CircleShape,
+                                    color = Color.White,
+                                    shadowElevation = 8.dp
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.AccountCircle,
-                                        contentDescription = "الملف الشخصي",
-                                        tint = Color(0xFF087FE5),
-                                        modifier = Modifier.size(31.dp)
-                                    )
+                                    androidx.compose.material3.IconButton(
+                                        onClick = { showProfile = true },
+                                        modifier = Modifier.fillMaxSize()
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.AccountCircle,
+                                            contentDescription = "الملف الشخصي",
+                                            tint = Color(0xFF087FE5),
+                                            modifier = Modifier.size(31.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -617,6 +638,9 @@ class MainActivity : ComponentActivity() {
                                     ).show()
                                 },
                                 onContinueAsGuest = {
+                                    accountPrefs.edit().putBoolean("onboarding_completed", true).apply()
+                                    hasCompletedOnboarding = true
+                                    isGuestMode = accountEmail.isNullOrBlank()
                                     showWelcomeSheet = false
                                 }
                             )
@@ -648,6 +672,7 @@ class MainActivity : ComponentActivity() {
                                         .putBoolean("onboarding_completed", true)
                                         .apply()
                                     accountEmail = email
+                                    isGuestMode = false
                                     hasCompletedOnboarding = true
                                     showRegistration = false
                                     showWelcomeSheet = false
@@ -682,6 +707,53 @@ class MainActivity : ComponentActivity() {
                         mapView.onDestroy()
                     }
                 }
+            }
+        }
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun GuestAccessProfileButton(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val pulse = rememberInfiniteTransition(label = "guestProfileGlow")
+    val glow by pulse.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.95f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1050),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "guestProfileGlowAlpha"
+    )
+
+    Box(
+        modifier = modifier
+            .size(56.dp)
+            .border(
+                width = 2.dp,
+                color = Color(0xFF36A5FF).copy(alpha = glow),
+                shape = androidx.compose.foundation.shape.CircleShape
+            )
+            .padding(3.dp)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            shape = androidx.compose.foundation.shape.CircleShape,
+            color = Color(0xFF102D4A),
+            shadowElevation = 10.dp
+        ) {
+            androidx.compose.material3.IconButton(
+                onClick = onClick,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.AccountCircle,
+                    contentDescription = "خيارات الحساب",
+                    tint = Color(0xFF8ED0FF),
+                    modifier = Modifier.size(32.dp)
+                )
             }
         }
     }
