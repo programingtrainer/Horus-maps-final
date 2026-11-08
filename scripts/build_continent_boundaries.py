@@ -27,9 +27,9 @@ CACHE = ROOT / "build" / "ne_50m_admin_0_countries.geojson"
 
 # Approximate Europe/Asia divide along the Urals and Ural River.
 URALS = [
-    (69.5, 81.0), (69.5, 69.0), (66.5, 68.8), (64.5, 66.5),
-    (59.5, 62.0), (59.2, 58.0), (59.2, 55.0), (58.5, 52.0),
-    (55.1, 51.8), (51.4, 51.2), (51.9, 47.0), (51.9, 40.0),
+    (81.0, 69.5), (69.0, 69.5), (68.8, 66.5), (66.5, 64.5),
+    (62.0, 59.5), (58.0, 59.2), (55.0, 59.2), (52.0, 58.5),
+    (51.8, 55.1), (51.2, 51.4), (47.0, 51.9), (40.0, 51.9),
 ]
 # Coordinates are (longitude, latitude).
 URAL_LINE = LineString([(lon, lat) for lon, lat in URALS])
