@@ -26,6 +26,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -805,9 +806,10 @@ class MainActivity : ComponentActivity() {
                                     mapInitializationRequested.value = true
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
-                                        // Keep the map data/source credits visible, but replace the MapLibre brand mark
-                                        // with HorusMaps branding in the app UI.
-                                        map.uiSettings.setLogoEnabled(false)
+                                         // Replace the MapLibre logo and native attribution info button with
+                                         // a plain HorusMaps wordmark and a persistent, readable source credit.
+                                         map.uiSettings.setLogoEnabled(false)
+                                         map.uiSettings.setAttributionEnabled(false)
                                         val mapViewportWidthPx = resources.displayMetrics.widthPixels.toDouble()
                                         val singleWorldMinZoom = (
                                             kotlin.math.ln(mapViewportWidthPx / 512.0) / kotlin.math.ln(2.0) + 0.12
@@ -851,27 +853,38 @@ class MainActivity : ComponentActivity() {
                             }
                         )
 
-                        // Subtle HorusMaps signature. Native map/source attribution remains enabled.
-                        Surface(
+                        // MapLibre-style plain wordmark in the lower-right corner (no badge or info icon).
+                        Text(
+                            text = "HorusMaps",
                             modifier = Modifier
                                 .align(androidx.compose.ui.AbsoluteAlignment.BottomRight)
                                 .navigationBarsPadding()
-                                .padding(
-                                    end = 18.dp,
-                                    bottom = if (remoteConfig.currentLocation) 166.dp else 96.dp
-                                ),
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color.White.copy(alpha = 0.96f),
-                            shadowElevation = 5.dp
-                        ) {
-                            Text(
-                                text = "HorusMaps",
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                                color = Color(0xFF172033),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
+                                .padding(end = 8.dp, bottom = 2.dp),
+                            color = Color(0xFF263238),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        // Keep required map-data credits visible after removing the native attribution button.
+                        Text(
+                            text = "OpenFreeMap © OpenMapTiles · © OpenStreetMap contributors",
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .navigationBarsPadding()
+                                .clickable {
+                                    startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://openstreetmap.org/copyright")
+                                        )
+                                    )
+                                }
+                                .padding(start = 8.dp, bottom = 2.dp),
+                            color = Color(0xFF344054),
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Normal,
+                            maxLines = 1
+                        )
 
                         Column(
                             modifier = Modifier
