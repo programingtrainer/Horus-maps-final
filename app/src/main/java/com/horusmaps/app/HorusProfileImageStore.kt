@@ -17,7 +17,7 @@ object HorusProfileImageStore {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             context.contentResolver.openInputStream(uri)?.use {
                 BitmapFactory.decodeStream(it, null, bounds)
-            } ?: return@runCatching null
+            }
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
 
             var sample = 1
