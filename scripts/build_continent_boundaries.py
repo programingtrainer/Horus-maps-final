@@ -31,8 +31,8 @@ URALS = [
     (62.0, 59.5), (58.0, 59.2), (55.0, 59.2), (52.0, 58.5),
     (51.8, 55.1), (51.2, 51.4), (47.0, 51.9), (40.0, 51.9),
 ]
-# Coordinates are (longitude, latitude).
-URAL_LINE = LineString([(lon, lat) for lon, lat in URALS])
+# URALS is stored as (latitude, longitude); Shapely expects (longitude, latitude).
+URAL_LINE = LineString([(lon, lat) for lat, lon in URALS])
 TURKEY_DIVIDE = LineString([
     (26.0, 40.20), (26.55, 40.25), (27.00, 40.35),
     (27.45, 40.55), (27.95, 40.70), (28.45, 40.85),
