@@ -10,6 +10,14 @@ private const val HORUS_API_BASE = "https://horus-maps-final.horus-egypt-company
 
 data class EmailCheckResult(val available: Boolean, val message: String)
 data class RegisterResult(val success: Boolean, val email: String? = null, val message: String)
+data class LoginResult(
+    val success: Boolean,
+    val email: String? = null,
+    val firstName: String = "",
+    val lastName: String = "",
+    val phone: String = "",
+    val message: String
+)
 
 object HorusAuthApi {
     suspend fun checkEmail(username: String): EmailCheckResult = withContext(Dispatchers.IO) {
@@ -35,6 +43,25 @@ object HorusAuthApi {
                 RegisterResult(true, root.optJSONObject("user")?.optString("email"), root.optString("message", "تم إنشاء الحساب بنجاح."))
             } else RegisterResult(false, message = root.optString("error", "تعذر إنشاء الحساب. حاول مرة أخرى."))
         }
+
+    suspend fun login(email: String, password: String): LoginResult = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("email", email.trim().lowercase()).put("password", password)
+        val response = post("/v1/auth/login", body)
+        val root = response.second
+        val user = root.optJSONObject("user")
+        if (response.first in 200..299 && root.optBoolean("ok") && user != null) {
+            LoginResult(
+                success = true,
+                email = user.optString("email"),
+                firstName = user.optString("firstName"),
+                lastName = user.optString("lastName"),
+                phone = user.optString("phone"),
+                message = root.optString("message", "تم تسجيل الدخول بنجاح.")
+            )
+        } else {
+            LoginResult(false, message = root.optString("error", "البريد الإلكتروني أو كلمة المرور غير صحيحة."))
+        }
+    }
 
     private fun post(path: String, body: JSONObject): Pair<Int, JSONObject> {
         val connection = (URL(HORUS_API_BASE + path).openConnection() as HttpURLConnection).apply {
