@@ -44,6 +44,9 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -85,9 +88,15 @@ fun ProfilePanel(
     imageUri: String?,
     isGuest: Boolean,
     is3DMode: Boolean,
+    accounts: List<HorusSavedAccount>,
+    currentEmail: String?,
     onDismiss: () -> Unit,
     onPickImage: () -> Unit,
     onOpenWelcome: () -> Unit,
+    onAddAccount: () -> Unit,
+    onSwitchAccount: (String) -> Unit,
+    onLogout: () -> Unit,
+    onDeleteAccount: () -> Unit,
     onToggle3D: (Boolean) -> Unit
 ) {
     var destination by remember { mutableStateOf(ProfileDestination.PROFILE) }
@@ -154,14 +163,20 @@ fun ProfilePanel(
                             phone = phone,
                             imageUri = imageUri,
                             isGuest = isGuest,
+                            accounts = accounts,
+                            currentEmail = currentEmail,
                             onDismiss = requestDismiss,
                             onPickImage = onPickImage,
                             onOpenSettings = { destination = ProfileDestination.SETTINGS },
-                            onOpenWelcome = requestWelcome
+                            onOpenWelcome = requestWelcome,
+                            onAddAccount = onAddAccount,
+                            onSwitchAccount = onSwitchAccount
                         )
                         ProfileDestination.SETTINGS -> ProfileSettings(
                             is3DMode = is3DMode,
                             onToggle3D = onToggle3D,
+                            onLogout = onLogout,
+                            onDeleteAccount = onDeleteAccount,
                             onBack = { destination = ProfileDestination.PROFILE }
                         )
                     }
@@ -179,10 +194,14 @@ private fun ProfileOverview(
     phone: String,
     imageUri: String?,
     isGuest: Boolean,
+    accounts: List<HorusSavedAccount>,
+    currentEmail: String?,
     onDismiss: () -> Unit,
     onPickImage: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenWelcome: () -> Unit
+    onOpenWelcome: () -> Unit,
+    onAddAccount: () -> Unit,
+    onSwitchAccount: (String) -> Unit
 ) {
     val fullName = listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ")
     val initials = (firstName.firstOrNull()?.uppercaseChar()?.toString() ?: "H") +
@@ -303,6 +322,14 @@ private fun ProfileOverview(
             }
         }
 
+        Spacer(Modifier.height(24.dp))
+        SavedAccountsSection(
+            accounts = accounts,
+            currentEmail = currentEmail,
+            onAddAccount = onAddAccount,
+            onSwitchAccount = onSwitchAccount
+        )
+
         Spacer(Modifier.height(20.dp))
         Text("HorusMaps  •  استكشف العالم بطريقتك", color = Color(0xFF9AA6B5), fontSize = 10.sp)
         Spacer(Modifier.height(16.dp))
@@ -332,11 +359,107 @@ private fun ProfileInfoCard(
 }
 
 @Composable
+private fun SavedAccountsSection(
+    accounts: List<HorusSavedAccount>,
+    currentEmail: String?,
+    onAddAccount: () -> Unit,
+    onSwitchAccount: (String) -> Unit
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("الحسابات", color = Color(0xFF172B45), fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text("إدارة حساباتك", color = Color(0xFF8290A2), fontSize = 10.sp)
+        }
+        Spacer(Modifier.height(10.dp))
+        accounts.forEach { account ->
+            val active = account.email.equals(currentEmail, true)
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    .clip(RoundedCornerShape(15.dp))
+                    .clickable(enabled = !active) { onSwitchAccount(account.email) },
+                shape = RoundedCornerShape(15.dp),
+                color = Color.White
+            ) {
+                Row(Modifier.padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ProfileAvatar(
+                        imageUri = account.imageUri,
+                        firstName = account.firstName,
+                        lastName = account.lastName,
+                        modifier = Modifier.size(42.dp)
+                    )
+                    Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
+                        Text(account.displayName, color = Color(0xFF26364A), fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(account.email, color = Color(0xFF8290A2), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (active) {
+                        Surface(shape = CircleShape, color = Color(0xFFE5F5ED)) {
+                            Text("الحالي", modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = Color(0xFF16845B), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Icon(Icons.Default.ChevronRight, contentDescription = "التبديل للحساب", tint = Color(0xFF8290A2))
+                    }
+                }
+            }
+        }
+        Surface(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp)).clickable(onClick = onAddAccount),
+            shape = RoundedCornerShape(15.dp),
+            color = Color(0xFFEAF3FC)
+        ) {
+            Row(Modifier.padding(horizontal = 15.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Person, contentDescription = null, tint = Color(0xFF087FE5))
+                Text("إضافة حساب آخر", modifier = Modifier.weight(1f).padding(horizontal = 12.dp), color = Color(0xFF1767B2), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color(0xFF087FE5))
+            }
+        }
+    }
+}
+
+@Composable
+fun ProfileAvatar(
+    imageUri: String?,
+    firstName: String,
+    lastName: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var bitmap by remember(imageUri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(imageUri) {
+        bitmap = if (imageUri.isNullOrBlank()) null else withContext(Dispatchers.IO) {
+            runCatching {
+                val uri = Uri.parse(imageUri)
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                val maxSide = maxOf(bounds.outWidth, bounds.outHeight)
+                val sample = if (maxSide > 1000) (maxSide / 1000).coerceAtLeast(1) else 1
+                val options = BitmapFactory.Options().apply { inSampleSize = sample }
+                context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+            }.getOrNull()
+        }
+    }
+    val initials = (firstName.firstOrNull()?.uppercaseChar()?.toString() ?: "H") +
+        (lastName.firstOrNull()?.uppercaseChar()?.toString() ?: "")
+    Box(
+        modifier = modifier.clip(CircleShape).background(Brush.linearGradient(listOf(Color(0xFFDCEEFF), Color(0xFFB9D9F8)))),
+        contentAlignment = Alignment.Center
+    ) {
+        if (bitmap != null) {
+            Image(bitmap!!.asImageBitmap(), contentDescription = "صورة الحساب", modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
+        } else {
+            Text(initials, color = Color(0xFF087FE5), fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
+        }
+    }
+}
+
+@Composable
 private fun ProfileSettings(
     is3DMode: Boolean,
     onToggle3D: (Boolean) -> Unit,
+    onLogout: () -> Unit,
+    onDeleteAccount: () -> Unit,
     onBack: () -> Unit
 ) {
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val appVersion = remember {
         runCatching {
@@ -383,6 +506,41 @@ private fun ProfileSettings(
                     Text("الإصدار $appVersion", color = Color(0xFF8290A2), fontSize = 11.sp)
                 }
             }
+        }
+
+        Spacer(Modifier.height(28.dp))
+        Button(
+            onClick = onLogout,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(15.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEAF3FC), contentColor = Color(0xFF1767B2))
+        ) {
+            Text("تسجيل الخروج", fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { showDeleteConfirmation = true },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(15.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFE8E8), contentColor = Color(0xFFB42318))
+        ) {
+            Text("حذف الحساب نهائيًا", fontWeight = FontWeight.Bold)
+        }
+        if (showDeleteConfirmation) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirmation = false },
+                title = { Text("حذف الحساب نهائيًا؟", fontWeight = FontWeight.Bold) },
+                text = { Text("سيتم حذف حسابك وبياناته من خوادم HorusMaps، ولن تتمكن من استعادته. هل أنت متأكد؟") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteConfirmation = false
+                        onDeleteAccount()
+                    }) { Text("حذف نهائيًا", color = Color(0xFFB42318), fontWeight = FontWeight.Bold) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirmation = false }) { Text("إلغاء") }
+                }
+            )
         }
     }
 }
