@@ -216,7 +216,7 @@ export default {
         const body = await readJson(request);
         const email = String(body.email || "").trim().toLowerCase();
         const password = String(body.password || "");
-        if (!/^[a-z0-9](?:[a-z0-9._-]{1,22}[a-z0-9])@horus\\.com$/.test(email) ||
+        if (!/^[a-z0-9](?:[a-z0-9._-]{1,22}[a-z0-9])@horus\.com$/.test(email) ||
             email.includes("..") || email.includes(".-") || email.includes("-." ) ||
             !password || password.length > 128) {
           return json({ ok: false, error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." }, 401);
