@@ -351,9 +351,13 @@ export default {
           mismatch |= (submittedHash.charCodeAt(i) || 0) ^ (expected.charCodeAt(i) || 0);
         }
         if (mismatch !== 0) return json({ ok: false, error: "كلمة المرور غير صحيحة. لم يتم حذف الحساب." }, 401);
-        const result = await env.HORUS_USERS.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
-        if (!result.success || result.meta?.changes !== 1) {
-          return json({ ok: false, error: "تعذر حذف الحساب. حاول مرة أخرى." }, 500);
+        await env.HORUS_USERS.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
+        // Verify persisted state rather than relying on the D1 changes counter.
+        const remainingUser = await env.HORUS_USERS.prepare(
+          "SELECT id FROM users WHERE id = ? LIMIT 1"
+        ).bind(user.id).first();
+        if (remainingUser) {
+          return json({ ok: false, error: "تعذر حذف الحساب. لم يتم تأكيد الحذف." }, 500);
         }
         return json({ ok: true, message: "تم حذف الحساب نهائيًا." });
       } catch (error) {
