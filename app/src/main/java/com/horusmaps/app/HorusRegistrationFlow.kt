@@ -92,7 +92,7 @@ private fun passwordLevel(value: String): PasswordLevel {
 }
 
 @Composable
-fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit) {
+fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String, String, String, String) -> Unit) {
     val phoneUtil = remember { PhoneNumberUtil.getInstance() }
     val countries = remember {
         val locale = Locale.getDefault()
@@ -348,7 +348,7 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onAccountCreated: (String) -> Unit
             if (result.success && !result.email.isNullOrBlank()) {
                 loadingMessage = "تم إنشاء حسابك بنجاح! جاري توجيهك إلى الخريطة..."
                 delay(1200)
-                onAccountCreated(result.email)
+                onAccountCreated(result.email, firstName.trim(), lastName.trim(), phoneAsE164().orEmpty())
             } else {
                 submitting = false
                 stage = 1
