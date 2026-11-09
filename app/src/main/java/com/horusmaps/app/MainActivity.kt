@@ -386,7 +386,7 @@ class MainActivity : ComponentActivity() {
         // smoothly during the final 1.5 seconds of its 10-second lifetime.
         val clearAfterFade = Runnable {
             val activeMarker = marker
-            val originalBitmap = runCatching { activeMarker.icon.bitmap }.getOrNull()
+            val originalBitmap = runCatching { activeMarker.icon?.bitmap }.getOrNull()
             if (originalBitmap == null) {
                 runCatching { map.removeAnnotation(activeMarker) }
                 if (searchMarker === activeMarker) searchMarker = null
