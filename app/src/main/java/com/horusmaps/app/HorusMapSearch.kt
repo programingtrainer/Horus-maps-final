@@ -40,7 +40,13 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
                 RESTAURANT -> setOf("مطعم", "مطاعم", "restaurant", "restaurants", "fast", "food", "cafe", "coffee", "shop", "كافيه", "مقهى", "مقاهي")
                 FUEL -> setOf("محطة", "محطات", "وقود", "بنزين", "بنزينة", "بنزينه", "بترول", "محروقات", "تعبئة", "fuel", "gas", "station", "stations", "petrol", "gasoline", "filling", "service", "pump")
             }.map(::normalize).toSet()
-            val ignoredTokens = genericTokens + setOf("في", "داخل", "in", "at", "near", "within", "بدولة", "دولة", "country").map(::normalize)
+            val ignoredTokens = genericTokens + setOf(
+                "في", "داخل", "in", "at", "near", "within", "بدولة", "دولة", "country",
+                "محافظة", "المحافظة", "محافظه", "ولاية", "الولاية", "منطقة", "المنطقة",
+                "مدينة", "المدينة", "حي", "الحي", "شارع", "الشارع", "طريق", "الطريق",
+                "قرية", "القرية", "مركز", "المركز", "governorate", "province", "state",
+                "city", "district", "neighborhood", "street", "road", "village", "county"
+            ).map(::normalize)
             return normalize(raw).split(" ").filter { token -> token.isNotBlank() && ignoredTokens.none { generic -> token == generic || (token.length >= 4 && levenshtein(token, generic) <= 1) } }.joinToString(" ")
         }
 
