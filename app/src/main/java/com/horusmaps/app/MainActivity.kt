@@ -979,9 +979,9 @@ class MainActivity : ComponentActivity() {
                     nearbySearchResults = emptyList()
                     searchError = null
                     val typedQuery = searchQuery.trim()
-                    if (searchExpanded && typedQuery.length >= 2) {
-                        delay(650L)
-                        if (typedQuery == searchQuery.trim()) runMapSearch()
+                    if (searchExpanded && typedQuery.length >= 2 && !searchHasRun) {
+                        delay(1000L)
+                        if (typedQuery == searchQuery.trim() && !searchHasRun) runMapSearch()
                     }
                 }
 
