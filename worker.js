@@ -285,6 +285,7 @@ async function resolveCountryScope(query) {
     target.searchParams.set("q", suffix);
     target.searchParams.set("limit", "8");
     target.searchParams.set("lang", "en");
+    target.searchParams.set("layer", "country");
     try {
       const response = await fetch(target.toString(), {
         headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
