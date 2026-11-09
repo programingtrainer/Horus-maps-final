@@ -86,7 +86,7 @@ data class HorusNearbyPlace(
 data class HorusCountryInfo(val code: String, val name: String)
 
 object HorusMapSearchApi {
-    private const val BASE_URL = "https://horus-maps-final.horus-egypt-company.workers.dev/v1/search"
+    private const val BASE_URL = "${BuildConfig.HORUS_API_BASE_URL}/v1/search"
     private const val USER_AGENT = "HorusMaps-Android/0.1"
 
     fun localContinent(context: android.content.Context, query: String): HorusGeoSearchResult? {
