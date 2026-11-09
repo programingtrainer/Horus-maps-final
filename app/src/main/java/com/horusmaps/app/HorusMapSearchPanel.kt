@@ -88,7 +88,7 @@ fun HorusMapSearchPanel(
                     },
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp),
-                    placeholder = { Text("ابحث عن دولة أو قارة أو مكان...", fontSize = 13.sp) },
+                    placeholder = { Text("ابحث عن مستشفى أو مدينة أو شارع أو منطقة...", fontSize = 13.sp) },
                     leadingIcon = {
                         Icon(Icons.Filled.Search, contentDescription = null, tint = Color(0xFF287FE8))
                     },
@@ -168,7 +168,7 @@ fun HorusMapSearchPanel(
 
                     if (!loading && selectedCategory == null && geographyResults.isEmpty() && query.length >= 2 && error.isNullOrBlank()) {
                         Text(
-                            "اضغط زر البحث لعرض النتائج الجغرافية.",
+                            "اكتب اسم المكان، وستظهر الاقتراحات تلقائيًا.",
                             modifier = Modifier.padding(horizontal = 8.dp),
                             color = Color(0xFF667085),
                             fontSize = 11.sp
@@ -177,7 +177,7 @@ fun HorusMapSearchPanel(
 
                     if (hasSearched && !loading && selectedCategory != null && nearbyResults.isEmpty() && error.isNullOrBlank() && query.isNotBlank()) {
                         Text(
-                            "لا توجد نتائج قريبة مطابقة داخل دولتك. جرّب اسمًا آخر أو فئة مختلفة.",
+                            "لم تظهر نتائج في النطاق الحالي. سنوسّع البحث إلى مناطق ودول أخرى.",
                             modifier = Modifier.padding(horizontal = 8.dp),
                             color = Color(0xFF667085),
                             fontSize = 11.sp
@@ -201,7 +201,11 @@ fun HorusMapSearchPanel(
                             items(nearbyResults, key = { it.id }) { result ->
                                 SearchResultRow(
                                     title = result.name,
-                                    subtitle = result.address.ifBlank { result.brand.ifBlank { selectedCategory.title } },
+                                    subtitle = listOf(result.address, result.region, result.country, result.brand)
+                                        .filter { it.isNotBlank() }
+                                        .distinct()
+                                        .joinToString("، ")
+                                        .ifBlank { selectedCategory.title },
                                     trailing = formatDistance(result.distanceMeters),
                                     onClick = { onSelectPlace(result) }
                                 )
