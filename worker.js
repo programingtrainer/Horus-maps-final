@@ -9,10 +9,10 @@ const DEFAULT_CONFIG = {
   },
   features: {
     currentLocation: true,
-    search: false,
-    nearbyPlaces: false,
+    search: true,
+    nearbyPlaces: true,
     routing: false,
-    categories: false
+    categories: true
   },
   ui: { showWelcomePanel: true },
   refresh: { intervalSeconds: 300 }
@@ -132,7 +132,7 @@ function escapeOverpassRegex(value) {
   return String(value || "")
     .trim()
     .slice(0, 64)
-    .replace(/[\\^$.*+?()[\]{}|]/g, "\\export default {");
+    .replace(/[\\^$.*+?()[\]{}|]/g, character => String.fromCharCode(92) + character);
 }
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -171,7 +171,6 @@ async function cachedJson(cacheKey, ttlSeconds, producer) {
 
 function overpassSelectors(category, query) {
   const escaped = escapeOverpassRegex(query);
-  const nameFilter = escaped ? '[~"^(name|brand|name:en|brand:en)$"~"' + escaped + '",i]' : "";
   if (category === "mosque") {
     return [
       'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="place_of_worship"]["religion"~"muslim|islam",i];',
