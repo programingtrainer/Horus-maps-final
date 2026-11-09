@@ -294,9 +294,11 @@ async function resolveCountryScope(query) {
       const payload = await response.json();
       const feature = (payload.features || []).find(item => {
         const p = item.properties || {};
-        const type = String(p.type || p.osm_value || "").toLowerCase();
+        const type = String(p.type || p.layer || "").toLowerCase();
+        const osmCountry = String(p.osm_key || "").toLowerCase() === "place" && String(p.osm_value || "").toLowerCase() === "country";
         const name = normalizeSearchText(p.name || "");
-        return type === "country" && (name === normalizeSearchText(suffix) || normalizeSearchText(p.country || "") === normalizeSearchText(suffix));
+        return (type === "country" || osmCountry) &&
+          (name === normalizeSearchText(suffix) || normalizeSearchText(p.country || "") === normalizeSearchText(suffix));
       });
       if (!feature) continue;
       const p = feature.properties || {};
@@ -306,7 +308,7 @@ async function resolveCountryScope(query) {
       return {
         countryCode: code,
         query: words.slice(0, words.length - count).join(" ").replace(/\b(in)\s*$/i, "").trim(),
-        matchedWords: count,
+        matchedWords: suffixWords.length,
         latitude: Number(coordinates[1]),
         longitude: Number(coordinates[0])
       };
