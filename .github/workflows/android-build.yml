@@ -163,7 +163,7 @@ jobs:
             signal: AbortSignal.timeout(55000)
           });
           const walmartGlobal = await walmartGlobalResponse.json();
-          if (!walmartGlobalResponse.ok || !walmartGlobal.ok || !Array.isArray(walmartGlobal.results) || !walmartGlobal.results.some(item => item.country !== "السعودية" && item.country !== "SA")) {
+          if (!walmartGlobalResponse.ok || !walmartGlobal.ok || !Array.isArray(walmartGlobal.results) || !walmartGlobal.results.some(item => item.countryCode && item.countryCode !== "sa")) {
             throw new Error("Cross-country global fallback smoke test failed: HTTP " + walmartGlobalResponse.status + ", results=" + (walmartGlobal.results || []).length);
           }
 
