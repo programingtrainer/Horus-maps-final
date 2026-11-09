@@ -2,6 +2,9 @@ package com.horusmaps.app
 
 import android.Manifest
 import android.animation.ValueAnimator
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
@@ -75,6 +78,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -82,6 +86,7 @@ import org.maplibre.android.MapLibre
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.Marker
 import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.style.layers.LineLayer
@@ -345,6 +350,8 @@ class MainActivity : ComponentActivity() {
     private val searchBoundaryHandler = Handler(Looper.getMainLooper())
     private var searchBoundaryAnimator: ValueAnimator? = null
     private var searchBoundaryClearRunnable: Runnable? = null
+    private var searchMarkerClearRunnable: Runnable? = null
+    private var searchMarkerFadeAnimator: ValueAnimator? = null
     private var searchMarker: Marker? = null
 
     private fun bestKnownLocation(map: org.maplibre.android.maps.MapLibreMap): Location? {
@@ -364,15 +371,64 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showSearchMarker(map: org.maplibre.android.maps.MapLibreMap, latitude: Double, longitude: Double, title: String) {
+        searchMarkerClearRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        searchMarkerClearRunnable = null
+        searchMarkerFadeAnimator?.cancel()
         runCatching { searchMarker?.let { map.removeAnnotation(it) } }
-        searchMarker = runCatching {
+
+        val marker = runCatching {
             map.addMarker(MarkerOptions().position(LatLng(latitude, longitude)).title(title))
         }.getOrNull()
+        searchMarker = marker ?: return
+
+        // Keep the marker fully visible for 8.5 seconds, then fade it out
+        // smoothly during the final 1.5 seconds of its 10-second lifetime.
+        val clearAfterFade = Runnable {
+            val activeMarker = marker
+            val originalBitmap = runCatching { activeMarker.icon.bitmap }.getOrNull()
+            if (originalBitmap == null) {
+                runCatching { map.removeAnnotation(activeMarker) }
+                if (searchMarker === activeMarker) searchMarker = null
+                return@Runnable
+            }
+            searchMarkerFadeAnimator?.cancel()
+            searchMarkerFadeAnimator = ValueAnimator.ofInt(255, 0).apply {
+                duration = 1500L
+                addUpdateListener { animation ->
+                    val alpha = animation.animatedValue as Int
+                    runCatching {
+                        val fadedBitmap = Bitmap.createBitmap(
+                            originalBitmap.width,
+                            originalBitmap.height,
+                            Bitmap.Config.ARGB_8888
+                        )
+                        Canvas(fadedBitmap).drawBitmap(
+                            originalBitmap,
+                            0f,
+                            0f,
+                            Paint(Paint.ANTI_ALIAS_FLAG).apply { this.alpha = alpha }
+                        )
+                        activeMarker.icon = IconFactory.getInstance(this@MainActivity).fromBitmap(fadedBitmap)
+                    }
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        runCatching { map.removeAnnotation(activeMarker) }
+                        if (searchMarker === activeMarker) searchMarker = null
+                        searchMarkerFadeAnimator = null
+                        searchMarkerClearRunnable = null
+                    }
+                })
+                start()
+            }
+        }
+        searchMarkerClearRunnable = clearAfterFade
+        searchBoundaryHandler.postDelayed(clearAfterFade, 8500L)
     }
 
     private fun showSearchBoundary(map: org.maplibre.android.maps.MapLibreMap, featureGeoJson: String) {
         searchBoundaryAnimator?.cancel()
-        searchBoundaryHandler.removeCallbacksAndMessages(null)
+        searchBoundaryClearRunnable?.let(searchBoundaryHandler::removeCallbacks)
         searchBoundaryClearRunnable = null
         map.getStyle { style ->
             val source = (style.getSource("horus-search-boundary") as? GeoJsonSource)
@@ -393,12 +449,6 @@ class MainActivity : ComponentActivity() {
                 }
                 searchBoundaryHandler.postDelayed({
                     runCatching { source.setGeoJson("""{"type":"FeatureCollection","features":[]}""") }
-                    // The red pin is the point annotation created for this same
-                    // geographic selection. Remove it when the boundary finishes fading.
-                    searchMarker?.let { marker ->
-                        runCatching { map.removeAnnotation(marker) }
-                        if (searchMarker === marker) searchMarker = null
-                    }
                 }, 1550L)
             }
             searchBoundaryClearRunnable = clear
@@ -521,6 +571,8 @@ class MainActivity : ComponentActivity() {
                 var showProfile by remember { mutableStateOf(false) }
                 var profileImageUri by remember { mutableStateOf(accountPrefs.getString("profile_image_uri", null)) }
                 var searchQuery by remember { mutableStateOf("") }
+                var activeSearchJob by remember { mutableStateOf<Job?>(null) }
+                var searchGeneration by remember { mutableStateOf(0) }
                 var searchExpanded by remember { mutableStateOf(false) }
                 var searchLoading by remember { mutableStateOf(false) }
                 var searchHasRun by remember { mutableStateOf(false) }
@@ -846,6 +898,9 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun runMapSearch() {
+                    activeSearchJob?.cancel()
+                    searchGeneration += 1
+                    val requestGeneration = searchGeneration
                     val rawQuery = searchQuery.trim()
                     val category = selectedSearchCategory ?: HorusSearchCategory.detect(rawQuery)
                     if (rawQuery.length < 2 && category == null) {
@@ -865,7 +920,7 @@ class MainActivity : ComponentActivity() {
                     geographySearchResults = emptyList()
                     nearbySearchResults = emptyList()
                     searchExpanded = true
-                    accountScope.launch {
+                    activeSearchJob = accountScope.launch {
                         try {
                             if (category != null) {
                                 val location = bestKnownLocation(map)
@@ -900,8 +955,23 @@ class MainActivity : ComponentActivity() {
                             searchError = error.message?.takeIf { it.isNotBlank() }
                                 ?: "حدث خطأ أثناء البحث. تحقق من اتصال الإنترنت وحاول مرة أخرى."
                         } finally {
-                            searchLoading = false
+                            if (requestGeneration == searchGeneration) {
+                                searchLoading = false
+                                activeSearchJob = null
+                            }
                         }
+                    }
+                }
+
+                LaunchedEffect(searchQuery, searchExpanded) {
+                    activeSearchJob?.cancel()
+                    activeSearchJob = null
+                    searchGeneration += 1
+                    searchLoading = false
+                    val typedQuery = searchQuery.trim()
+                    if (searchExpanded && typedQuery.length >= 2) {
+                        delay(600L)
+                        if (typedQuery == searchQuery.trim()) runMapSearch()
                     }
                 }
 
