@@ -32,6 +32,9 @@ jobs:
           python3 -m pip install --disable-pip-version-check "shapely>=2.0,<3"
           python3 scripts/build_continent_boundaries.py
 
+      - name: Validate Cloudflare Worker syntax
+        run: node --check worker.js
+
       - name: Build debug APK
         run: gradle assembleDebug
 
