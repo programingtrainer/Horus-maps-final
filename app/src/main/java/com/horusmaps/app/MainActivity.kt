@@ -809,7 +809,13 @@ class MainActivity : ComponentActivity() {
                                          // Replace the MapLibre logo and native attribution info button with
                                          // a plain HorusMaps wordmark and a persistent, readable source credit.
                                          map.uiSettings.setLogoEnabled(false)
-                                         map.uiSettings.setAttributionEnabled(false)
+                                          map.uiSettings.setAttributionEnabled(false)
+                                          // Keep the compass clear of the profile control in the top-right.
+                                          // Place it in the upper-left corner with a comfortable inset.
+                                          map.uiSettings.setCompassGravity(android.view.Gravity.TOP or android.view.Gravity.LEFT)
+                                          val compassInset = (16 * resources.displayMetrics.density).toInt()
+                                          val compassTop = (112 * resources.displayMetrics.density).toInt()
+                                          map.uiSettings.setCompassMargins(compassInset, compassTop, 0, 0)
                                         val mapViewportWidthPx = resources.displayMetrics.widthPixels.toDouble()
                                         val singleWorldMinZoom = (
                                             kotlin.math.ln(mapViewportWidthPx / 512.0) / kotlin.math.ln(2.0) + 0.12
@@ -865,8 +871,8 @@ class MainActivity : ComponentActivity() {
                             fontWeight = FontWeight.Medium
                         )
 
-                        // Compact, single-line source credits: keep the required map attributions,
-                        // without adding a second brand label or the optional OpenFreeMap name.
+                        // Required source attribution stays discreet in the opposite corner
+                        // from the HorusMaps wordmark, with both source names remaining tappable.
                         Row(
                             modifier = Modifier
                                 .align(Alignment.BottomStart)
@@ -874,22 +880,6 @@ class MainActivity : ComponentActivity() {
                                 .padding(start = 8.dp, bottom = 2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "© OpenMapTiles.org",
-                                modifier = Modifier.clickable {
-                                    startActivity(
-                                        android.content.Intent(
-                                            android.content.Intent.ACTION_VIEW,
-                                            android.net.Uri.parse("https://openmaptiles.org/")
-                                        )
-                                    )
-                                },
-                                color = Color(0xFF344054),
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Normal,
-                                maxLines = 1
-                            )
-                            Text("  ·  ", color = Color(0xFF344054), fontSize = 8.sp)
                             Text(
                                 text = "© OpenStreetMap",
                                 modifier = Modifier.clickable {
@@ -900,8 +890,24 @@ class MainActivity : ComponentActivity() {
                                         )
                                     )
                                 },
-                                color = Color(0xFF344054),
-                                fontSize = 8.sp,
+                                color = Color(0xFF667085).copy(alpha = 0.72f),
+                                fontSize = 7.sp,
+                                fontWeight = FontWeight.Normal,
+                                maxLines = 1
+                            )
+                            Text(" · ", color = Color(0xFF667085).copy(alpha = 0.72f), fontSize = 7.sp)
+                            Text(
+                                text = "OpenMapTiles",
+                                modifier = Modifier.clickable {
+                                    startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://openmaptiles.org/")
+                                        )
+                                    )
+                                },
+                                color = Color(0xFF667085).copy(alpha = 0.72f),
+                                fontSize = 7.sp,
                                 fontWeight = FontWeight.Normal,
                                 maxLines = 1
                             )
