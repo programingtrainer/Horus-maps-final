@@ -1,6 +1,10 @@
 package com.horusmaps.app
 
 import android.Manifest
+import android.animation.ValueAnimator
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
@@ -26,6 +30,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,13 +77,22 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.annotations.IconFactory
+import org.maplibre.android.annotations.Marker
+import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.maps.Style
 import org.maplibre.android.location.LocationComponentActivationOptions
@@ -334,6 +348,176 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
 }
 
 class MainActivity : ComponentActivity() {
+    private val searchBoundaryHandler = Handler(Looper.getMainLooper())
+    private var searchBoundaryAnimator: ValueAnimator? = null
+    private var searchBoundaryClearRunnable: Runnable? = null
+    private var searchBoundaryFinishRunnable: Runnable? = null
+    private var searchMarkerClearRunnable: Runnable? = null
+    private var searchMarkerFadeAnimator: ValueAnimator? = null
+    private var searchMarker: Marker? = null
+
+    private fun bestKnownLocation(map: org.maplibre.android.maps.MapLibreMap): Location? {
+        val componentLocation = runCatching {
+            if (map.locationComponent.isLocationComponentActivated) map.locationComponent.lastKnownLocation else null
+        }.getOrNull()
+        if (componentLocation != null) return componentLocation
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) return null
+        val manager = getSystemService(LOCATION_SERVICE) as LocationManager
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+        return providers.mapNotNull { runCatching { manager.getLastKnownLocation(it) }.getOrNull() }
+            .filter { System.currentTimeMillis() - it.time < 2 * 60 * 60 * 1000L }
+            .maxByOrNull { it.time }
+    }
+
+    private fun showSearchMarker(map: org.maplibre.android.maps.MapLibreMap, latitude: Double, longitude: Double, title: String) {
+        searchMarkerClearRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        searchMarkerClearRunnable = null
+        searchMarkerFadeAnimator?.cancel()
+        runCatching { searchMarker?.let { map.removeAnnotation(it) } }
+
+        val marker = runCatching {
+            map.addMarker(MarkerOptions().position(LatLng(latitude, longitude)).title(title))
+        }.getOrNull()
+        searchMarker = marker ?: return
+
+        // Keep the marker fully visible for 8.5 seconds, then fade it out
+        // smoothly during the final 1.5 seconds of its 10-second lifetime.
+        val clearAfterFade = Runnable {
+            val activeMarker = marker
+            val originalBitmap = runCatching { activeMarker.icon?.bitmap }.getOrNull()
+            if (originalBitmap == null) {
+                runCatching { map.removeAnnotation(activeMarker) }
+                if (searchMarker === activeMarker) searchMarker = null
+                return@Runnable
+            }
+            searchMarkerFadeAnimator?.cancel()
+            searchMarkerFadeAnimator = ValueAnimator.ofInt(255, 0).apply {
+                duration = 1500L
+                addUpdateListener { animation ->
+                    val alpha = animation.animatedValue as Int
+                    runCatching {
+                        val fadedBitmap = Bitmap.createBitmap(
+                            originalBitmap.width,
+                            originalBitmap.height,
+                            Bitmap.Config.ARGB_8888
+                        )
+                        Canvas(fadedBitmap).drawBitmap(
+                            originalBitmap,
+                            0f,
+                            0f,
+                            Paint(Paint.ANTI_ALIAS_FLAG).apply { this.alpha = alpha }
+                        )
+                        activeMarker.icon = IconFactory.getInstance(this@MainActivity).fromBitmap(fadedBitmap)
+                    }
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        runCatching { map.removeAnnotation(activeMarker) }
+                        if (searchMarker === activeMarker) searchMarker = null
+                        searchMarkerFadeAnimator = null
+                        searchMarkerClearRunnable = null
+                    }
+                })
+                start()
+            }
+        }
+        searchMarkerClearRunnable = clearAfterFade
+        searchBoundaryHandler.postDelayed(clearAfterFade, 8500L)
+    }
+
+    private fun showSearchBoundary(map: org.maplibre.android.maps.MapLibreMap, featureGeoJson: String) {
+        searchBoundaryAnimator?.cancel()
+        searchBoundaryClearRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        searchBoundaryFinishRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        searchBoundaryClearRunnable = null
+        searchBoundaryFinishRunnable = null
+        map.getStyle { style ->
+            val source = (style.getSource("horus-search-boundary") as? GeoJsonSource)
+                ?: GeoJsonSource("horus-search-boundary", featureGeoJson).also { style.addSource(it) }
+            source.setGeoJson(featureGeoJson)
+            val layer = (style.getLayer("horus-search-boundary-line") as? LineLayer)
+                ?: LineLayer("horus-search-boundary-line", "horus-search-boundary").apply {
+                    setProperties(PropertyFactory.lineColor("#F02035"), PropertyFactory.lineWidth(3.2f), PropertyFactory.lineOpacity(1.0f))
+                }.also { style.addLayer(it) }
+            layer.setProperties(PropertyFactory.lineColor("#F02035"), PropertyFactory.lineWidth(3.2f), PropertyFactory.lineOpacity(1.0f))
+            val clear = Runnable {
+                searchBoundaryAnimator = ValueAnimator.ofFloat(1.0f, 0.0f).apply {
+                    duration = 1500L
+                    addUpdateListener { animation ->
+                        runCatching { layer.setProperties(PropertyFactory.lineOpacity(animation.animatedValue as Float)) }
+                    }
+                    start()
+                }
+                val finishFade = Runnable {
+                    runCatching { source.setGeoJson("""{"type":"FeatureCollection","features":[]}""") }
+                    searchBoundaryFinishRunnable = null
+                }
+                searchBoundaryFinishRunnable = finishFade
+                searchBoundaryHandler.postDelayed(finishFade, 1550L)
+            }
+            searchBoundaryClearRunnable = clear
+            searchBoundaryHandler.postDelayed(clear, 8500L)
+        }
+    }
+
+    private fun focusSearchResult(map: org.maplibre.android.maps.MapLibreMap, result: HorusGeoSearchResult) {
+        val bounds = result.bounds
+        if (bounds != null) {
+            val crossesAntimeridian = bounds.west > bounds.east
+            if (crossesAntimeridian) {
+                // LatLngBounds.Builder treats west/east as an ordinary numeric
+                // range. For a polygon crossing +/-180°, that can produce a
+                // nearly-worldwide box whose apparent center is around Africa.
+                // The search API now supplies the center of the shortest
+                // longitude arc, so use it directly for this camera transition.
+                val longitudeSpan = (180.0 - bounds.west) + (bounds.east + 180.0)
+                val latitudeSpan = bounds.north - bounds.south
+                val extent = maxOf(longitudeSpan, latitudeSpan)
+                val zoom = when {
+                    extent > 150.0 -> 2.2
+                    extent > 110.0 -> 2.7
+                    extent > 75.0 -> 3.3
+                    extent > 45.0 -> 4.0
+                    extent > 25.0 -> 4.8
+                    extent > 12.0 -> 5.8
+                    else -> 6.8
+                }
+                map.animateCamera(
+                    CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), zoom),
+                    1050
+                )
+            } else {
+                runCatching {
+                    val fitBounds = LatLngBounds.Builder()
+                        .include(LatLng(bounds.north, bounds.west))
+                        .include(LatLng(bounds.south, bounds.east))
+                        .build()
+                    map.animateCamera(CameraUpdateFactory.newLatLngBounds(fitBounds, (112 * resources.displayMetrics.density).toInt()), 1050)
+                }.onFailure {
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 7.0), 900)
+                }
+            }
+        } else {
+            val kind = result.kind.lowercase()
+            val zoom = when {
+                kind in setOf(
+                    "village", "hamlet", "suburb", "neighbourhood", "quarter", "locality",
+                    "isolated_dwelling", "residential", "primary", "secondary", "tertiary",
+                    "unclassified", "service", "pedestrian", "living_street", "road"
+                ) -> 15.0
+                kind in setOf("city", "town") -> 12.5
+                kind in setOf("state", "county", "province", "administrative") -> 7.5
+                else -> 12.0
+            }
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), zoom), 900)
+        }
+        showSearchMarker(map, result.latitude, result.longitude, result.name)
+        showSearchBoundary(map, result.geometryGeoJson)
+    }
+
     private fun enableBlueLocationDot(map: org.maplibre.android.maps.MapLibreMap, style: Style) {
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -429,6 +613,16 @@ class MainActivity : ComponentActivity() {
                 var showLogin by remember { mutableStateOf(false) }
                 var showProfile by remember { mutableStateOf(false) }
                 var profileImageUri by remember { mutableStateOf(accountPrefs.getString("profile_image_uri", null)) }
+                var searchQuery by remember { mutableStateOf("") }
+                var activeSearchJob by remember { mutableStateOf<Job?>(null) }
+                var searchGeneration by remember { mutableStateOf(0) }
+                var searchExpanded by remember { mutableStateOf(false) }
+                var searchLoading by remember { mutableStateOf(false) }
+                var searchHasRun by remember { mutableStateOf(false) }
+                var searchError by remember { mutableStateOf<String?>(null) }
+                var selectedSearchCategory by remember { mutableStateOf<HorusSearchCategory?>(null) }
+                var geographySearchResults by remember { mutableStateOf<List<HorusGeoSearchResult>>(emptyList()) }
+                var nearbySearchResults by remember { mutableStateOf<List<HorusNearbyPlace>>(emptyList()) }
 
                 fun activateAccount(
                     email: String,
@@ -745,6 +939,108 @@ class MainActivity : ComponentActivity() {
                     if (fine || coarse) mapLibreMap?.let { centerOnCurrentLocation(it) }
                     else locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                 }
+
+                fun runMapSearch() {
+                    activeSearchJob?.cancel()
+                    searchGeneration += 1
+                    val requestGeneration = searchGeneration
+                    val rawQuery = searchQuery.trim()
+                    val category = selectedSearchCategory ?: HorusSearchCategory.detect(rawQuery)
+                    if (rawQuery.length < 2 && category == null) {
+                        searchError = "اكتب اسم دولة أو قارة أو مكان للبحث."
+                        searchExpanded = true
+                        return
+                    }
+                    val map = mapLibreMap
+                    if (map == null) {
+                        searchError = "الخريطة ما زالت تُحمّل. حاول بعد لحظات."
+                        return
+                    }
+                    selectedSearchCategory = category
+                    searchLoading = true
+                    searchHasRun = true
+                    searchError = null
+                    geographySearchResults = emptyList()
+                    nearbySearchResults = emptyList()
+                    searchExpanded = true
+                    activeSearchJob = accountScope.launch {
+                        try {
+                            if (category != null) {
+                                val location = bestKnownLocation(map)
+                                if (location == null) {
+                                    val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                    val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                    if (!fine && !coarse) {
+                                        searchError = "للعثور على أقرب فرع داخل دولتك، اسمح لـ HorusMaps باستخدام موقعك."
+                                        locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                                    } else {
+                                        searchError = "لم نتمكن من تحديد موقعك الحالي. تأكد من تشغيل GPS ثم انتظر لحظات وحاول مجددًا."
+                                        centerOnCurrentLocation(map)
+                                    }
+                                    return@launch
+                                }
+                                val country = HorusMapSearchApi.reverseCountry(location.latitude, location.longitude)
+                                val branchQuery = HorusSearchCategory.queryFor(rawQuery, category)
+                                val results = HorusMapSearchApi.nearbyPlaces(branchQuery, category, location.latitude, location.longitude, country.code, rawQuery)
+                                nearbySearchResults = results
+                                if (results.isEmpty()) {
+                                    searchError = "لم نعثر على نتائج مطابقة داخل " + country.name.ifBlank { "دولتك" } + " ضمن نطاق البحث."
+                                }
+                            } else {
+                                val target = map.cameraPosition.target
+                                val localContinent = HorusMapSearchApi.localContinent(this@MainActivity, rawQuery)
+                                val results = if (localContinent != null) listOf(localContinent)
+                                    else HorusMapSearchApi.geocode(rawQuery, target?.latitude, target?.longitude)
+                                geographySearchResults = results
+                                if (results.isEmpty()) searchError = "لم نعثر على مكان مطابق. جرّب كتابة الاسم بطريقة أخرى."
+                            }
+                        } catch (cancelled: CancellationException) {
+                            // A query change, a newer request, or closing the panel can
+                            // legitimately cancel this request. Never show cancellation
+                            // as a user-facing search failure.
+                            throw cancelled
+                        } catch (error: Exception) {
+                            if (requestGeneration == searchGeneration) {
+                                searchError = error.message?.takeIf { it.isNotBlank() }
+                                    ?: "حدث خطأ أثناء البحث. تحقق من اتصال الإنترنت وحاول مرة أخرى."
+                            }
+                        } finally {
+                            if (requestGeneration == searchGeneration) {
+                                searchLoading = false
+                                activeSearchJob = null
+                            }
+                        }
+                    }
+                }
+
+                LaunchedEffect(searchQuery, searchExpanded, searchHasRun) {
+                    // Debounce only schedules a search. It must not cancel a request
+                    // already started by the search button or keyboard action.
+                    // Including searchHasRun as a key cancels the pending debounce as
+                    // soon as a manual search begins.
+                    val typedQuery = searchQuery.trim()
+                    if (searchExpanded && typedQuery.length >= 2 && !searchHasRun) {
+                        delay(1000L)
+                        if (typedQuery == searchQuery.trim() && !searchHasRun) {
+                            runMapSearch()
+                        }
+                    }
+                }
+
+                fun selectGeographyResult(result: HorusGeoSearchResult) {
+                    mapLibreMap?.let { focusSearchResult(it, result) }
+                    searchExpanded = false
+                    searchError = null
+                }
+
+                fun selectNearbyResult(result: HorusNearbyPlace) {
+                    mapLibreMap?.let { map ->
+                        map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 16.5), 900)
+                        showSearchMarker(map, result.latitude, result.longitude, result.name)
+                    }
+                    searchExpanded = false
+                    searchError = null
+                }
                 LaunchedEffect(Unit) {
                     HorusRemoteConfig.refresh(this@MainActivity) { updated ->
                         remoteConfig = updated
@@ -805,9 +1101,16 @@ class MainActivity : ComponentActivity() {
                                     mapInitializationRequested.value = true
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
-                                        // Keep the map data/source credits visible, but replace the MapLibre brand mark
-                                        // with HorusMaps branding in the app UI.
-                                        map.uiSettings.setLogoEnabled(false)
+                                         // Replace the MapLibre logo and native attribution info button with
+                                         // a plain HorusMaps wordmark and a persistent, readable source credit.
+                                         map.uiSettings.setLogoEnabled(false)
+                                          map.uiSettings.setAttributionEnabled(false)
+                                          // Keep the compass clear of the profile control in the top-right.
+                                          // Place it in the upper-left corner with a comfortable inset.
+                                          map.uiSettings.setCompassGravity(android.view.Gravity.TOP or android.view.Gravity.LEFT)
+                                          val compassInset = (16 * resources.displayMetrics.density).toInt()
+                                          val compassTop = (112 * resources.displayMetrics.density).toInt()
+                                          map.uiSettings.setCompassMargins(compassInset, compassTop, 0, 0)
                                         val mapViewportWidthPx = resources.displayMetrics.widthPixels.toDouble()
                                         val singleWorldMinZoom = (
                                             kotlin.math.ln(mapViewportWidthPx / 512.0) / kotlin.math.ln(2.0) + 0.12
@@ -851,25 +1154,97 @@ class MainActivity : ComponentActivity() {
                             }
                         )
 
-                        // Subtle HorusMaps signature. Native map/source attribution remains enabled.
-                        Surface(
+                        HorusMapSearchPanel(
+                            query = searchQuery,
+                            onQueryChange = { value ->
+                                searchQuery = value
+                                searchHasRun = false
+                                searchError = null
+                            },
+                            expanded = searchExpanded,
+                            onExpandedChange = { searchExpanded = it },
+                            loading = searchLoading,
+                            hasSearched = searchHasRun,
+                            error = searchError,
+                            selectedCategory = selectedSearchCategory,
+                            geographyResults = geographySearchResults,
+                            nearbyResults = nearbySearchResults,
+                            onCategorySelected = { category ->
+                                selectedSearchCategory = category
+                                searchQuery = ""
+                                searchHasRun = false
+                                searchError = null
+                                geographySearchResults = emptyList()
+                                nearbySearchResults = emptyList()
+                                searchExpanded = true
+                            },
+                            onSearch = { runMapSearch() },
+                            onSelectGeography = { selectGeographyResult(it) },
+                            onSelectPlace = { selectNearbyResult(it) },
+                            onClose = {
+                                searchExpanded = false
+                                searchQuery = ""
+                                searchHasRun = false
+                                searchError = null
+                                selectedSearchCategory = null
+                                geographySearchResults = emptyList()
+                                nearbySearchResults = emptyList()
+                            },
+                            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                                .padding(start = 12.dp, end = 78.dp, top = 8.dp)
+                        )
+
+                        // MapLibre-style plain wordmark in the lower-right corner (no badge or info icon).
+                        Text(
+                            text = "HorusMaps",
                             modifier = Modifier
                                 .align(androidx.compose.ui.AbsoluteAlignment.BottomRight)
                                 .navigationBarsPadding()
-                                .padding(
-                                    end = 18.dp,
-                                    bottom = if (remoteConfig.currentLocation) 166.dp else 96.dp
-                                ),
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color.White.copy(alpha = 0.96f),
-                            shadowElevation = 5.dp
+                                .padding(end = 8.dp, bottom = 2.dp),
+                            color = Color(0xFF263238),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        // Required source attribution stays discreet in the opposite corner
+                        // from the HorusMaps wordmark, with both source names remaining tappable.
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .navigationBarsPadding()
+                                .padding(start = 8.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "HorusMaps",
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                                color = Color(0xFF172033),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
+                                text = "© OpenStreetMap",
+                                modifier = Modifier.clickable {
+                                    startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://openstreetmap.org/copyright")
+                                        )
+                                    )
+                                },
+                                color = Color(0xFF667085).copy(alpha = 0.72f),
+                                fontSize = 7.sp,
+                                fontWeight = FontWeight.Normal,
+                                maxLines = 1
+                            )
+                            Text(" · ", color = Color(0xFF667085).copy(alpha = 0.72f), fontSize = 7.sp)
+                            Text(
+                                text = "OpenMapTiles",
+                                modifier = Modifier.clickable {
+                                    startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://openmaptiles.org/")
+                                        )
+                                    )
+                                },
+                                color = Color(0xFF667085).copy(alpha = 0.72f),
+                                fontSize = 7.sp,
+                                fontWeight = FontWeight.Normal,
+                                maxLines = 1
                             )
                         }
 
