@@ -377,6 +377,24 @@ async function resolveCountryScope(query) {
   return null;
 }
 
+let nominatimQueue = Promise.resolve();
+let nominatimLastStartedAt = 0;
+
+async function fetchNominatim(url, options) {
+  let release;
+  const previous = nominatimQueue;
+  nominatimQueue = new Promise(resolve => { release = resolve; });
+  await previous;
+  const wait = Math.max(0, 1000 - (Date.now() - nominatimLastStartedAt));
+  if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+  nominatimLastStartedAt = Date.now();
+  try {
+    return await fetch(url, options);
+  } finally {
+    release();
+  }
+}
+
 async function resolvePlaceScope(query, nearLat, nearLon) {
   const value = String(query || "").trim().slice(0, 100);
   if (value.length < 2) return null;
@@ -395,7 +413,7 @@ async function resolvePlaceScope(query, nearLat, nearLon) {
   }
 
   try {
-    const response = await fetch(target.toString(), {
+    const response = await fetchNominatim(target.toString(), {
       headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
       signal: AbortSignal.timeout(8000)
     });
@@ -605,7 +623,7 @@ async function queryNominatimPlaces(category, query, centerLat, centerLon, optio
     target.searchParams.set("bounded", "1");
   }
 
-  const response = await fetch(target.toString(), {
+  const response = await fetchNominatim(target.toString(), {
     headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
     signal: AbortSignal.timeout(8000)
   });
@@ -960,7 +978,7 @@ export default {
         }
         let payload = null;
         try {
-          const response = await fetch(target.toString(), {
+          const response = await fetchNominatim(target.toString(), {
             headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
             signal: AbortSignal.timeout(8000)
           });
@@ -1035,7 +1053,7 @@ export default {
         target.searchParams.set("zoom", "3");
         target.searchParams.set("addressdetails", "1");
         target.searchParams.set("accept-language", "ar,en");
-        const response = await fetch(target.toString(), {
+        const response = await fetchNominatim(target.toString(), {
           headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
           signal: AbortSignal.timeout(15000)
         });
