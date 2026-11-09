@@ -351,7 +351,7 @@ async function queryOverpass(lat, lon, countryCode, category, query, radius) {
           latitude.toFixed(3) + ":" + longitude.toFixed(3);
         return cachedJson(env, cacheKey, 900, async () => {
           let elements = [];
-          let usedRadius = 15000;
+          let usedRadius = 50000;
           for (const radius of [50000, 150000]) {
             usedRadius = radius;
             elements = await queryOverpass(latitude, longitude, countryCode, category, query, radius);
