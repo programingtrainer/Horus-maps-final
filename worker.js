@@ -144,27 +144,24 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-async function cachedJson(cacheKey, ttlSeconds, producer) {
-  const cache = caches.default;
-  const cacheRequest = new Request("https://horus-search-cache.invalid/" + encodeURIComponent(cacheKey));
-  const cached = await cache.match(cacheRequest);
-  if (cached) {
-    return new Response(cached.body, {
-      status: cached.status,
-      headers: { ...Object.fromEntries(cached.headers), ...corsHeaders, "Content-Type": "application/json; charset=utf-8" }
-    });
+async function cachedJson(env, cacheKey, ttlSeconds, producer) {
+  const key = "horus:search-cache:v1:" + cacheKey;
+  if (env.HORUS_MAPS_CONFIG) {
+    try {
+      const cached = await env.HORUS_MAPS_CONFIG.get(key);
+      if (cached) return json(JSON.parse(cached));
+    } catch (error) {
+      console.warn("[HorusSearch] Cache read failed", String(error?.message || error).slice(0, 120));
+    }
   }
   const response = await producer();
-  if (response.ok) {
-    const body = await response.clone().arrayBuffer();
-    const stored = new Response(body, {
-      status: response.status,
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "public, max-age=" + ttlSeconds
-      }
-    });
-    await cache.put(cacheRequest, stored);
+  if (response.ok && env.HORUS_MAPS_CONFIG) {
+    try {
+      const payload = await response.clone().text();
+      await env.HORUS_MAPS_CONFIG.put(key, payload, { expirationTtl: ttlSeconds });
+    } catch (error) {
+      console.warn("[HorusSearch] Cache write failed", String(error?.message || error).slice(0, 120));
+    }
   }
   return response;
 }
@@ -225,7 +222,7 @@ async function queryOverpass(lat, lon, countryCode, category, query, radius) {
   const selectors = overpassSelectors(category, query)
     .map(item => item.replaceAll("RADIUS", String(radius)).replaceAll("LAT", String(lat)).replaceAll("LON", String(lon)))
     .join("\n");
-  const overpassQuery = '[out:json][timeout:22];area["ISO3166-1"="' + countryCode.toUpperCase() + '"]["admin_level"="2"]->.country;(' +
+  const overpassQuery = '[out:json][timeout:14];area["ISO3166-1"="' + countryCode.toUpperCase() + '"]["admin_level"="2"]->.country;(' +
     selectors + ');out center tags 80;';
   let lastError = null;
   for (const endpoint of SEARCH_OVERPASS_ENDPOINTS) {
@@ -237,7 +234,7 @@ async function queryOverpass(lat, lon, countryCode, category, query, radius) {
           "User-Agent": SEARCH_USER_AGENT
         },
         body: "data=" + encodeURIComponent(overpassQuery),
-        signal: AbortSignal.timeout(26000)
+        signal: AbortSignal.timeout(16000)
       });
       if (!response.ok) {
         lastError = new Error("Overpass HTTP " + response.status);
@@ -285,7 +282,7 @@ async function queryOverpass(lat, lon, countryCode, category, query, radius) {
       const language = String(url.searchParams.get("lang") || "ar,en").slice(0, 32);
       const cacheKey = "geocode:v1:" + query.toLocaleLowerCase() + ":" + language + ":" +
         (latitude === null ? "" : latitude.toFixed(2)) + ":" + (longitude === null ? "" : longitude.toFixed(2));
-      return cachedJson(cacheKey, 86400, async () => {
+      return cachedJson(env, cacheKey, 86400, async () => {
         const target = new URL("https://nominatim.openstreetmap.org/search");
         target.searchParams.set("q", query);
         target.searchParams.set("format", "geojson");
@@ -352,10 +349,10 @@ async function queryOverpass(lat, lon, countryCode, category, query, radius) {
         }
         const cacheKey = "places:v1:" + countryCode + ":" + category + ":" + query.toLocaleLowerCase() + ":" +
           latitude.toFixed(3) + ":" + longitude.toFixed(3);
-        return cachedJson(cacheKey, 900, async () => {
+        return cachedJson(env, cacheKey, 900, async () => {
           let elements = [];
           let usedRadius = 15000;
-          for (const radius of [15000, 50000, 120000, 250000]) {
+          for (const radius of [50000, 150000]) {
             usedRadius = radius;
             elements = await queryOverpass(latitude, longitude, countryCode, category, query, radius);
             if (elements.length > 0) break;
