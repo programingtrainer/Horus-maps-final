@@ -883,7 +883,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 val country = HorusMapSearchApi.reverseCountry(location.latitude, location.longitude)
                                 val branchQuery = HorusSearchCategory.queryFor(rawQuery, category)
-                                val results = HorusMapSearchApi.nearbyPlaces(branchQuery, category, location.latitude, location.longitude, country.code)
+                                val results = HorusMapSearchApi.nearbyPlaces(branchQuery, category, location.latitude, location.longitude, country.code, rawQuery)
                                 nearbySearchResults = results
                                 if (results.isEmpty()) {
                                     searchError = "لم نعثر على نتائج مطابقة داخل " + country.name.ifBlank { "دولتك" } + " ضمن نطاق البحث."
