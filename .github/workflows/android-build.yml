@@ -74,6 +74,12 @@ jobs:
             throw new Error("Country alias smoke test failed for أمريكا: HTTP " + usaResponse.status);
           }
 
+          const localityResponse = await fetch(base + "/v1/search/geocode?q=" + encodeURIComponent("منية سندوب") + "&lang=ar,en", { signal: AbortSignal.timeout(25000) });
+          const locality = await localityResponse.json();
+          if (!localityResponse.ok || !locality.ok || !Array.isArray(locality.features) || locality.features.length === 0) {
+            throw new Error("Small locality geocoding smoke test failed for منية سندوب.");
+          }
+
           const typoCountryResponse = await fetch(base + "/v1/search/geocode?q=" + encodeURIComponent("United State") + "&lang=en", { signal: AbortSignal.timeout(25000) });
           const typoCountry = await typoCountryResponse.json();
           const typoCountryMatches = (typoCountry.features || []).some(feature => {
@@ -137,6 +143,28 @@ jobs:
           const hospitals = await hospitalResponse.json();
           if (!hospitalResponse.ok || !hospitals.ok || !Array.isArray(hospitals.results) || hospitals.results.length === 0) {
             throw new Error("Nearby hospital smoke test failed: HTTP " + hospitalResponse.status + ", error=" + (hospitals.error || "no results"));
+          }
+
+          const dohaHospitalResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "hospital", query: "الدوحة", rawQuery: "مستشفيات الدوحة" }),
+            signal: AbortSignal.timeout(55000)
+          });
+          const dohaHospitals = await dohaHospitalResponse.json();
+          if (!dohaHospitalResponse.ok || !dohaHospitals.ok || dohaHospitals.countryCode !== "qa" || dohaHospitals.searchScope !== "administrative-area" || !Array.isArray(dohaHospitals.results) || dohaHospitals.results.length === 0) {
+            throw new Error("Doha administrative-area hospital search failed: HTTP " + dohaHospitalResponse.status + ", country=" + dohaHospitals.countryCode + ", scope=" + dohaHospitals.searchScope + ", results=" + (dohaHospitals.results || []).length);
+          }
+
+          const walmartGlobalResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "supermarket", query: "Walmart", rawQuery: "Walmart" }),
+            signal: AbortSignal.timeout(55000)
+          });
+          const walmartGlobal = await walmartGlobalResponse.json();
+          if (!walmartGlobalResponse.ok || !walmartGlobal.ok || !Array.isArray(walmartGlobal.results) || !walmartGlobal.results.some(item => item.country !== "السعودية" && item.country !== "SA")) {
+            throw new Error("Cross-country global fallback smoke test failed: HTTP " + walmartGlobalResponse.status + ", results=" + (walmartGlobal.results || []).length);
           }
 
           const egyptCarrefourResponse = await fetch(base + "/v1/search/places", {
