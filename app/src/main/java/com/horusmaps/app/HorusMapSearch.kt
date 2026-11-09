@@ -21,12 +21,12 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
         fun detect(raw: String): HorusSearchCategory? {
             val value = normalize(raw)
             return when {
-                listOf("مسجد", "مساجد", "جامع", "جوامع", "mosque", "mosques", "masjid").any(value::contains) -> MOSQUE
-                listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "supermarket", "grocery").any(value::contains) -> SUPERMARKET
-                listOf("مستشفى", "مستشفيات", "hospital", "hospitals").any(value::contains) -> HOSPITAL
-                listOf("صيدلية", "صيدليات", "pharmacy", "pharmacies").any(value::contains) -> PHARMACY
-                listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه").any(value::contains) -> RESTAURANT
-                listOf("محطة وقود", "بنزين", "وقود", "fuel", "gas station", "petrol").any(value::contains) -> FUEL
+                listOf("مسجد", "مساجد", "جامع", "جوامع", "mosque", "mosques", "masjid").any { value.contains(it) } -> MOSQUE
+                listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "supermarket", "grocery", "بنده", "panda", "كارفور", "carrefour", "لولو", "lulu", "دانوب", "danube", "العثيم", "othaim").any { value.contains(it) } -> SUPERMARKET
+                listOf("مستشفى", "مستشفيات", "hospital", "hospitals").any { value.contains(it) } -> HOSPITAL
+                listOf("صيدلية", "صيدليات", "pharmacy", "pharmacies").any { value.contains(it) } -> PHARMACY
+                listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه").any { value.contains(it) } -> RESTAURANT
+                listOf("محطة وقود", "بنزين", "وقود", "fuel", "gas station", "petrol").any { value.contains(it) } -> FUEL
                 else -> null
             }
         }
@@ -35,13 +35,15 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
             val value = normalize(raw)
             val generic = when (category) {
                 MOSQUE -> listOf("مسجد", "مساجد", "جامع", "جوامع", "mosque", "mosques", "masjid")
-                SUPERMARKET -> listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "supermarket", "grocery")
+                listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "supermarket", "grocery", "بنده", "panda", "كارفور", "carrefour", "لولو", "lulu", "دانوب", "danube", "العثيم", "othaim").any { value.contains(it) } -> SUPERMARKET
                 HOSPITAL -> listOf("مستشفى", "مستشفيات", "hospital", "hospitals")
                 PHARMACY -> listOf("صيدلية", "صيدليات", "pharmacy", "pharmacies")
                 RESTAURANT -> listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه")
                 FUEL -> listOf("محطة وقود", "بنزين", "وقود", "fuel", "gas station", "petrol")
             }.map(::normalize)
-            return if (generic.any { it == value }) "" else raw.trim()
+            if (generic.any { it == value }) return ""
+            return raw.replace(Regex("(?i)سوبر\\s*ماركت|ماركت|supermarket|grocery|mosques?|masjid|hospitals?|pharmacies?|restaurants?|gas\\s*station|petrol|fuel|مطاعم|مطعم|مساجد|مسجد|جوامع|جامع|مستشفيات|مستشفى|صيدليات|صيدلية|محطة\\s*وقود|وقود|بنزين|كافيه"), "")
+                .trim()
         }
 
         private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
@@ -122,7 +124,11 @@ object HorusMapSearchApi {
                             displayName = display,
                             latitude = centerLat,
                             longitude = centerLon,
-                            geometryGeoJson = geometry.toString(),
+                            geometryGeoJson = JSONObject()
+                                .put("type", "Feature")
+                                .put("geometry", geometry)
+                                .put("properties", JSONObject().put("name", properties.optString("name")))
+                                .toString(),
                             bounds = if (maxLat - minLat > 0.0001 || maxLon - minLon > 0.0001) {
                                 HorusGeoBounds(minLat, maxLat, minLon, maxLon)
                             } else null,
