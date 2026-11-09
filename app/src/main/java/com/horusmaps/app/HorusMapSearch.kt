@@ -21,38 +21,35 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
         fun detect(raw: String): HorusSearchCategory? {
             val value = normalize(raw)
             return when {
-                listOf("مسجد", "مساجد", "جامع", "جوامع", "mosque", "mosques", "masjid").any { value.contains(it) } -> MOSQUE
-                listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "supermarket", "grocery", "بنده", "panda", "كارفور", "carrefour", "لولو", "lulu", "دانوب", "danube", "العثيم", "othaim").any { value.contains(it) } -> SUPERMARKET
-                listOf("مستشفى", "مستشفيات", "hospital", "hospitals").any { value.contains(it) } -> HOSPITAL
-                listOf("صيدلية", "صيدليات", "pharmacy", "pharmacies").any { value.contains(it) } -> PHARMACY
-                listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه").any { value.contains(it) } -> RESTAURANT
-                listOf("محطة وقود", "بنزين", "وقود", "fuel", "gas station", "petrol").any { value.contains(it) } -> FUEL
+                listOf("مسجد", "مساجد", "جامع", "جوامع", "مصلى", "mosque", "mosques", "masjid", "prayer hall").any { value.contains(it) } -> MOSQUE
+                listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "بقالة", "supermarket", "super market", "grocery", "market", "بنده", "panda", "كارفور", "carrefour", "لولو", "lulu", "دانوب", "danube", "العثيم", "othaim").any { value.contains(it) } -> SUPERMARKET
+                listOf("مستشفى", "مستشفي", "مستشفيات", "مستشفيّات", "hospital", "hospitals", "clinic").any { value.contains(it) } -> HOSPITAL
+                listOf("صيدلية", "صيدليه", "صيدليات", "صيدليات", "pharmacy", "pharmacies", "chemist", "drugstore").any { value.contains(it) } -> PHARMACY
+                listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه", "مقهى").any { value.contains(it) } -> RESTAURANT
+                listOf("محطة وقود", "محطة بنزين", "بنزين", "وقود", "fuel", "gas station", "petrol", "gasoline").any { value.contains(it) } -> FUEL
                 else -> null
             }
         }
 
         fun queryFor(raw: String, category: HorusSearchCategory): String {
-            val value = normalize(raw)
-            val generic = when (category) {
-                MOSQUE -> listOf("مسجد", "مساجد", "جامع", "جوامع", "mosque", "mosques", "masjid")
-                SUPERMARKET -> listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "supermarket", "grocery")
-                HOSPITAL -> listOf("مستشفى", "مستشفيات", "hospital", "hospitals")
-                PHARMACY -> listOf("صيدلية", "صيدليات", "pharmacy", "pharmacies")
-                RESTAURANT -> listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه")
-                FUEL -> listOf("محطة وقود", "بنزين", "وقود", "fuel", "gas station", "petrol")
-            }.map(::normalize)
-            if (generic.any { it == value }) return ""
-            return raw.replace(Regex("(?i)سوبر\\s*ماركت|ماركت|supermarket|grocery|mosques?|masjid|hospitals?|pharmacies?|restaurants?|gas\\s*station|petrol|fuel|مطاعم|مطعم|مساجد|مسجد|جوامع|جامع|مستشفيات|مستشفى|صيدليات|صيدلية|محطة\\s*وقود|وقود|بنزين|كافيه"), "")
-                .trim()
+            val genericTokens = when (category) {
+                MOSQUE -> setOf("مسجد", "مساجد", "جامع", "جوامع", "مصلى", "mosque", "mosques", "masjid", "prayer", "hall")
+                SUPERMARKET -> setOf("سوبر", "ماركت", "سوبرماركت", "متجر", "بقالة", "supermarket", "super", "market", "grocery", "shop")
+                HOSPITAL -> setOf("مستشفى", "مستشفي", "مستشفيات", "hospital", "hospitals", "clinic")
+                PHARMACY -> setOf("صيدلية", "صيدليه", "صيدليات", "pharmacy", "pharmacies", "chemist", "drugstore")
+                RESTAURANT -> setOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه", "مقهى")
+                FUEL -> setOf("محطة", "وقود", "بنزين", "fuel", "gas", "station", "petrol", "gasoline")
+            }.map(::normalize).toSet()
+            return normalize(raw).split(" ").filter { it.isNotBlank() && it !in genericTokens }.joinToString(" ")
         }
 
         private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
-            .replace('أ', 'ا').replace('إ', 'ا').replace('آ', 'ا')
-            .replace('ى', 'ي').replace("ـ", "")
-            .replace(Regex("[\\u064B-\\u065F]"), "")
-            .trim()
-    }
-}
+            .replace(Regex("[\\u064B-\\u065F\\u0670]"), "")
+            .replace(Regex("[\\u0640]"), "")
+            .replace(Regex("[أإآٱ]"), "ا")
+            .replace("ى", "ي").replace("ة", "ه")
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .trim().replace(Regex("\\s+"), " ")}
 
 data class HorusGeoBounds(
     val south: Double,
