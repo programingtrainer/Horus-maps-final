@@ -397,7 +397,7 @@ async function resolvePlaceScope(query, nearLat, nearLon) {
   try {
     const response = await fetch(target.toString(), {
       headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(8000)
     });
     if (!response.ok) return null;
     const payload = await response.json();
@@ -456,13 +456,13 @@ async function queryOverpassPlaceScope(scope, category) {
     selectors = overpassSelectors(category, "")
       .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(area.searchArea)"))
       .join("\n");
-    overpassQuery = '[out:json][timeout:18];area(' + areaId + ')->.searchArea;(' + selectors + ');out center tags 100;';
+    overpassQuery = '[out:json][timeout:12];area(' + areaId + ')->.searchArea;(' + selectors + ');out center tags 100;';
   } else if (scope.bounds) {
     const { south, north, west, east } = scope.bounds;
     selectors = overpassSelectors(category, "")
       .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(" + south + "," + west + "," + north + "," + east + ")"))
       .join("\n");
-    overpassQuery = '[out:json][timeout:18];(' + selectors + ');out center tags 100;';
+    overpassQuery = '[out:json][timeout:12];(' + selectors + ');out center tags 100;';
   } else {
     const radius = scope.type === "city" || scope.type === "town" ? 12000 : 4500;
     return await queryOverpass(scope.latitude, scope.longitude, scope.countryCode, category, "", radius);
@@ -476,7 +476,7 @@ async function queryOverpassPlaceScope(scope, category) {
         "User-Agent": SEARCH_USER_AGENT
       },
       body: "data=" + encodeURIComponent(overpassQuery),
-      signal: AbortSignal.timeout(20000)
+      signal: AbortSignal.timeout(12000)
     });
     if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
     const data = await response.json();
@@ -516,7 +516,7 @@ async function queryPhotonGlobal(category, query, centerLat, centerLon) {
     }
     const response = await fetch(target.toString(), {
       headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(8000)
     });
     if (!response.ok) throw new Error("Photon global search HTTP " + response.status);
     const payload = await response.json();
@@ -607,7 +607,7 @@ async function queryNominatimPlaces(category, query, centerLat, centerLon, optio
 
   const response = await fetch(target.toString(), {
     headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
-    signal: AbortSignal.timeout(12000)
+    signal: AbortSignal.timeout(8000)
   });
   if (!response.ok) throw new Error("Nominatim POI fallback HTTP " + response.status);
   const payload = await response.json();
@@ -697,7 +697,7 @@ async function queryPhotonCountry(countryCode, category, query, centerLat, cente
     }
     const response = await fetch(target.toString(), {
       headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(8000)
     });
     if (!response.ok) throw new Error("Photon country search HTTP " + response.status);
     const payload = await response.json();
@@ -744,7 +744,7 @@ async function queryOverpassCountry(countryCode, category, query) {
   const selectors = overpassSelectors(category, query)
     .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(area.searchArea)"))
     .join("\n");
-  const overpassQuery = '[out:json][timeout:20];area["ISO3166-1"="' + countryCode + '"]["admin_level"="2"]->.searchArea;(' + selectors + ');out center tags 80;';
+  const overpassQuery = '[out:json][timeout:12];area["ISO3166-1"="' + countryCode + '"]["admin_level"="2"]->.searchArea;(' + selectors + ');out center tags 80;';
   const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
     const response = await fetch(endpoint, {
       method: "POST",
@@ -753,7 +753,7 @@ async function queryOverpassCountry(countryCode, category, query) {
         "User-Agent": SEARCH_USER_AGENT
       },
       body: "data=" + encodeURIComponent(overpassQuery),
-      signal: AbortSignal.timeout(22000)
+      signal: AbortSignal.timeout(12000)
     });
     if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
     const data = await response.json();
@@ -849,7 +849,7 @@ async function queryPhoton(lat, lon, category, query, radius) {
 
     const response = await fetch(target.toString(), {
       headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(8000)
     });
     if (!response.ok) throw new Error("Photon " + tag + " HTTP " + response.status);
     const payload = await response.json();
@@ -962,7 +962,7 @@ export default {
         try {
           const response = await fetch(target.toString(), {
             headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
-            signal: AbortSignal.timeout(12000)
+            signal: AbortSignal.timeout(8000)
           });
           if (response.ok) payload = await response.json();
           else console.warn("[HorusSearch] Nominatim returned HTTP", response.status);
@@ -984,7 +984,7 @@ export default {
             }
             const fallbackResponse = await fetch(fallback.toString(), {
               headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
-              signal: AbortSignal.timeout(12000)
+              signal: AbortSignal.timeout(8000)
             });
             if (fallbackResponse.ok) {
               payload = await fallbackResponse.json();
