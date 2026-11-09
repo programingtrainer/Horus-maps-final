@@ -1104,6 +1104,15 @@ export default {
                   haversineMeters(sortLatitude, sortLongitude, Number(item.lat), Number(item.lon)) <= 15000
                 );
               }
+              if (elements.length === 0) {
+                try {
+                  elements = await queryNominatimPlaces(category, "", sortLatitude, sortLongitude, {
+                    bounds: placeScope.bounds
+                  });
+                } catch (nominatimError) {
+                  console.warn("[HorusSearch] Regional Nominatim fallback unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
+                }
+              }
             }
             elements = elements.map(item => ({ ...item, __horusScopeRank: 0 }));
           } else if (globalCountrySearch) {
@@ -1119,6 +1128,15 @@ export default {
                 elements = await queryPhotonCountry(countryCode, category, query, sortLatitude, sortLongitude);
               }
             }
+            if (elements.length === 0) {
+              try {
+                elements = await queryNominatimPlaces(category, query, sortLatitude, sortLongitude, {
+                  countryCode
+                });
+              } catch (nominatimError) {
+                console.warn("[HorusSearch] Country Nominatim fallback unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
+              }
+            }
             elements = elements.map(item => ({ ...item, __horusScopeRank: 1 }));
           } else {
             let nearbyElements = [];
@@ -1132,7 +1150,27 @@ export default {
               console.warn("[HorusSearch] Nearby Overpass unavailable", String(overpassError?.message || overpassError).slice(0, 160));
             }
             if (nearbyElements.length === 0) {
-              nearbyElements = await queryPhoton(latitude, longitude, category, query, 25000);
+              try {
+                nearbyElements = await queryPhoton(latitude, longitude, category, query, 25000);
+              } catch (photonError) {
+                console.warn("[HorusSearch] Nearby Photon unavailable", String(photonError?.message || photonError).slice(0, 140));
+              }
+            }
+            if (nearbyElements.length === 0) {
+              const latDelta = 25000 / 111320;
+              const lonDelta = 25000 / (111320 * Math.max(0.2, Math.cos(latitude * Math.PI / 180)));
+              try {
+                nearbyElements = await queryNominatimPlaces(category, query, latitude, longitude, {
+                  bounds: {
+                    south: latitude - latDelta,
+                    north: latitude + latDelta,
+                    west: longitude - lonDelta,
+                    east: longitude + lonDelta
+                  }
+                });
+              } catch (nominatimError) {
+                console.warn("[HorusSearch] Nearby Nominatim fallback unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
+              }
             }
             elements = nearbyElements.map(item => ({ ...item, __horusScopeRank: 0 }));
 
@@ -1154,16 +1192,33 @@ export default {
                   console.warn("[HorusSearch] Country Photon fallback unavailable", String(photonError?.message || photonError).slice(0, 120));
                 }
               }
+              if (countryElements.length === 0) {
+                try {
+                  countryElements = await queryNominatimPlaces(category, query, latitude, longitude, {
+                    countryCode
+                  });
+                } catch (nominatimError) {
+                  console.warn("[HorusSearch] Country Nominatim expansion unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
+                }
+              }
               elements.push(...countryElements.map(item => ({ ...item, __horusScopeRank: 1 })));
             }
 
             if (elements.length < 5) {
+              let globalElements = [];
               try {
-                const globalElements = await queryPhotonGlobal(category, query, latitude, longitude);
-                elements.push(...globalElements.map(item => ({ ...item, __horusScopeRank: 2 })));
+                globalElements = await queryPhotonGlobal(category, query, latitude, longitude);
               } catch (globalError) {
-                console.warn("[HorusSearch] Global fallback unavailable", String(globalError?.message || globalError).slice(0, 140));
+                console.warn("[HorusSearch] Global Photon fallback unavailable", String(globalError?.message || globalError).slice(0, 140));
               }
+              if (globalElements.length === 0) {
+                try {
+                  globalElements = await queryNominatimPlaces(category, query, latitude, longitude);
+                } catch (nominatimError) {
+                  console.warn("[HorusSearch] Global Nominatim fallback unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
+                }
+              }
+              elements.push(...globalElements.map(item => ({ ...item, __horusScopeRank: 2 })));
             }
           }
           const results = [];
