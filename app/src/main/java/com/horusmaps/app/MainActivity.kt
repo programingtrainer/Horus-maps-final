@@ -77,6 +77,7 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -968,9 +969,16 @@ class MainActivity : ComponentActivity() {
                                 geographySearchResults = results
                                 if (results.isEmpty()) searchError = "لم نعثر على مكان مطابق. جرّب كتابة الاسم بطريقة أخرى."
                             }
+                        } catch (cancelled: CancellationException) {
+                            // A query change, a newer request, or closing the panel can
+                            // legitimately cancel this request. Never show cancellation
+                            // as a user-facing search failure.
+                            throw cancelled
                         } catch (error: Exception) {
-                            searchError = error.message?.takeIf { it.isNotBlank() }
-                                ?: "حدث خطأ أثناء البحث. تحقق من اتصال الإنترنت وحاول مرة أخرى."
+                            if (requestGeneration == searchGeneration) {
+                                searchError = error.message?.takeIf { it.isNotBlank() }
+                                    ?: "حدث خطأ أثناء البحث. تحقق من اتصال الإنترنت وحاول مرة أخرى."
+                            }
                         } finally {
                             if (requestGeneration == searchGeneration) {
                                 searchLoading = false
@@ -980,18 +988,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(searchQuery, searchExpanded) {
-                    activeSearchJob?.cancel()
-                    activeSearchJob = null
-                    searchGeneration += 1
-                    searchLoading = false
-                    geographySearchResults = emptyList()
-                    nearbySearchResults = emptyList()
-                    searchError = null
+                LaunchedEffect(searchQuery, searchExpanded, searchHasRun) {
+                    // Debounce only schedules a search. It must not cancel a request
+                    // already started by the search button or keyboard action.
+                    // Including searchHasRun as a key cancels the pending debounce as
+                    // soon as a manual search begins.
                     val typedQuery = searchQuery.trim()
                     if (searchExpanded && typedQuery.length >= 2 && !searchHasRun) {
                         delay(1000L)
-                        if (typedQuery == searchQuery.trim() && !searchHasRun) runMapSearch()
+                        if (typedQuery == searchQuery.trim() && !searchHasRun) {
+                            runMapSearch()
+                        }
                     }
                 }
 
