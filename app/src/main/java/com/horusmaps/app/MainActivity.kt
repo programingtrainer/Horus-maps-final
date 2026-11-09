@@ -469,7 +469,14 @@ class MainActivity : ComponentActivity() {
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 7.0), 900)
             }
         } else {
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 12.0), 900)
+            val kind = result.kind.lowercase(Locale.ROOT)
+            val zoom = when {
+                kind in setOf("village", "hamlet", "suburb", "neighbourhood", "quarter", "locality", "isolated_dwelling") -> 15.0
+                kind in setOf("city", "town") -> 12.5
+                kind in setOf("state", "county", "province", "administrative") -> 7.5
+                else -> 12.0
+            }
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), zoom), 900)
         }
         showSearchMarker(map, result.latitude, result.longitude, result.name)
         showSearchBoundary(map, result.geometryGeoJson)
@@ -968,9 +975,12 @@ class MainActivity : ComponentActivity() {
                     activeSearchJob = null
                     searchGeneration += 1
                     searchLoading = false
+                    geographySearchResults = emptyList()
+                    nearbySearchResults = emptyList()
+                    searchError = null
                     val typedQuery = searchQuery.trim()
                     if (searchExpanded && typedQuery.length >= 2) {
-                        delay(600L)
+                        delay(650L)
                         if (typedQuery == searchQuery.trim()) runMapSearch()
                     }
                 }
