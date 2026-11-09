@@ -496,13 +496,17 @@ async function queryPhotonGlobal(category, query, centerLat, centerLon) {
   const tags = PHOTON_TAGS[category] || [];
   const searchText = photonSearchText(correctKnownSearchTerms(query));
   if (!tags.length) return [];
-  const attempts = tags.map(async tag => {
+
+  const attempts = tags.flatMap(tag => [true, false].map(async useLocationBias => {
     const target = new URL("https://photon.komoot.io/api/");
-    target.searchParams.set("lat", String(centerLat));
-    target.searchParams.set("lon", String(centerLon));
     target.searchParams.set("limit", "50");
     target.searchParams.set("lang", "en");
-    target.searchParams.set("distance_sort", "true");
+    if (useLocationBias) {
+      target.searchParams.set("lat", String(centerLat));
+      target.searchParams.set("lon", String(centerLon));
+      target.searchParams.set("distance_sort", "true");
+      target.searchParams.set("location_bias_scale", "0.1");
+    }
     if (searchText) {
       target.searchParams.set("q", searchText);
       target.searchParams.set("osm_tag", tag);
@@ -518,7 +522,7 @@ async function queryPhotonGlobal(category, query, centerLat, centerLon) {
     const payload = await response.json();
     if (!Array.isArray(payload.features)) throw new Error("Photon global search returned invalid data");
     return payload.features;
-  });
+  }));
 
   const settled = await Promise.allSettled(attempts);
   const seen = new Set();
