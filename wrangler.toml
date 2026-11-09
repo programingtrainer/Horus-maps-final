@@ -20,3 +20,21 @@ id = "1d944d08456c43eb998b8ca3f8e5fb9e"
 binding = "HORUS_USERS"
 database_id = "183163d2-6c15-41ad-99b2-17f91406682c"
 database_name = "horus_maps_preview"
+
+# Full observability for Preview only; Production settings remain unchanged.
+[previews.observability]
+enabled = true
+
+  [previews.observability.logs]
+  enabled = true
+  head_sampling_rate = 1
+  invocation_logs = true
+  persist = true
+
+  [previews.observability.traces]
+  enabled = true
+  head_sampling_rate = 1
+  persist = true
+
+  [previews.observability.issues]
+  enabled = true
