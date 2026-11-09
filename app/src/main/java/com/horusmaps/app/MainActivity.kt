@@ -469,7 +469,7 @@ class MainActivity : ComponentActivity() {
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 7.0), 900)
             }
         } else {
-            val kind = result.kind.lowercase(Locale.ROOT)
+            val kind = result.kind.lowercase()
             val zoom = when {
                 kind in setOf("village", "hamlet", "suburb", "neighbourhood", "quarter", "locality", "isolated_dwelling") -> 15.0
                 kind in setOf("city", "town") -> 12.5
