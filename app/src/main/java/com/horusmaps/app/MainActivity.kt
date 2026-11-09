@@ -350,6 +350,7 @@ class MainActivity : ComponentActivity() {
     private val searchBoundaryHandler = Handler(Looper.getMainLooper())
     private var searchBoundaryAnimator: ValueAnimator? = null
     private var searchBoundaryClearRunnable: Runnable? = null
+    private var searchBoundaryFinishRunnable: Runnable? = null
     private var searchMarkerClearRunnable: Runnable? = null
     private var searchMarkerFadeAnimator: ValueAnimator? = null
     private var searchMarker: Marker? = null
@@ -429,7 +430,9 @@ class MainActivity : ComponentActivity() {
     private fun showSearchBoundary(map: org.maplibre.android.maps.MapLibreMap, featureGeoJson: String) {
         searchBoundaryAnimator?.cancel()
         searchBoundaryClearRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        searchBoundaryFinishRunnable?.let(searchBoundaryHandler::removeCallbacks)
         searchBoundaryClearRunnable = null
+        searchBoundaryFinishRunnable = null
         map.getStyle { style ->
             val source = (style.getSource("horus-search-boundary") as? GeoJsonSource)
                 ?: GeoJsonSource("horus-search-boundary", featureGeoJson).also { style.addSource(it) }
@@ -447,9 +450,12 @@ class MainActivity : ComponentActivity() {
                     }
                     start()
                 }
-                searchBoundaryHandler.postDelayed({
+                val finishFade = Runnable {
                     runCatching { source.setGeoJson("""{"type":"FeatureCollection","features":[]}""") }
-                }, 1550L)
+                    searchBoundaryFinishRunnable = null
+                }
+                searchBoundaryFinishRunnable = finishFade
+                searchBoundaryHandler.postDelayed(finishFade, 1550L)
             }
             searchBoundaryClearRunnable = clear
             searchBoundaryHandler.postDelayed(clear, 8500L)
