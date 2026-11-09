@@ -64,6 +64,26 @@ jobs:
             throw new Error("Geocoding smoke test failed: HTTP " + geocodeResponse.status + ", error=" + (geocode.error || "no features"));
           }
 
+          const usaResponse = await fetch(base + "/v1/search/geocode?q=" + encodeURIComponent("أمريكا") + "&lang=en", { signal: AbortSignal.timeout(25000) });
+          const usa = await usaResponse.json();
+          const usaMatches = (usa.features || []).some(feature => {
+            const p = feature.properties || {};
+            return /united states|usa/i.test([p.name, p.country, p.display_name].filter(Boolean).join(" "));
+          });
+          if (!usaResponse.ok || !usa.ok || !usaMatches) {
+            throw new Error("Country alias smoke test failed for أمريكا: HTTP " + usaResponse.status);
+          }
+
+          const typoCountryResponse = await fetch(base + "/v1/search/geocode?q=" + encodeURIComponent("Untied States") + "&lang=en", { signal: AbortSignal.timeout(25000) });
+          const typoCountry = await typoCountryResponse.json();
+          const typoCountryMatches = (typoCountry.features || []).some(feature => {
+            const p = feature.properties || {};
+            return /united states|usa/i.test([p.name, p.country, p.display_name].filter(Boolean).join(" "));
+          });
+          if (!typoCountryResponse.ok || !typoCountry.ok || !typoCountryMatches) {
+            throw new Error("Typo-tolerant country search smoke test failed for Untied States.");
+          }
+
           const placesResponse = await fetch(base + "/v1/search/places", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -86,6 +106,17 @@ jobs:
             throw new Error("Panda supermarket smoke test failed: HTTP " + pandaResponse.status + ", error=" + (panda.error || "no results"));
           }
 
+          const typoPandaResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "supermarket", query: "Pnda" }),
+            signal: AbortSignal.timeout(40000)
+          });
+          const typoPanda = await typoPandaResponse.json();
+          if (!typoPandaResponse.ok || !typoPanda.ok || !Array.isArray(typoPanda.results) || typoPanda.results.length === 0) {
+            throw new Error("Typo-tolerant Panda search smoke test failed.");
+          }
+
           const pharmacyResponse = await fetch(base + "/v1/search/places", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -100,8 +131,11 @@ jobs:
           console.log("Preview search smoke tests passed:", JSON.stringify({
             reverseCountry: reverse.countryCode,
             geocodeResults: geocode.features.length,
+            usaAliasResults: usa.features.length,
+            typoCountryResults: typoCountry.features.length,
             nearbySupermarkets: places.results.length,
             pandaMatches: panda.results.length,
+            typoPandaMatches: typoPanda.results.length,
             nearbyPharmacies: pharmacies.results.length
           }));
           NODE
