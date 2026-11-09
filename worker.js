@@ -408,12 +408,17 @@ async function resolvePlaceScope(query, nearLat, nearLon) {
       "secondary", "tertiary", "unclassified", "service", "pedestrian",
       "living_street", "road"
     ]);
-    const candidate = (Array.isArray(payload) ? payload : []).find(item => {
+    const validPlace = item => {
       const category = String(item.class || item.category || "").toLowerCase();
       const type = String(item.type || "").toLowerCase();
       return ["place", "boundary", "highway"].includes(category) && allowedTypes.has(type) &&
         /^[a-z]{2}$/i.test(String(item.address?.country_code || ""));
-    });
+    };
+    const candidates = (Array.isArray(payload) ? payload : []).filter(validPlace);
+    const normalizedQuery = normalizeSearchText(value);
+    const candidate = candidates.find(item =>
+      normalizeSearchText(item.name || "") === normalizedQuery
+    ) || candidates[0];
     if (!candidate) return null;
 
     const bbox = Array.isArray(candidate.boundingbox) ? candidate.boundingbox.map(Number) : [];
