@@ -371,12 +371,13 @@ async function queryPhotonCountry(countryCode, category, query, centerLat, cente
     const target = new URL(searchText ? "https://photon.komoot.io/api/" : "https://photon.komoot.io/reverse");
     if (searchText) {
       target.searchParams.set("q", searchText);
+      target.searchParams.set("countrycode", countryCode.toUpperCase());
     } else {
       target.searchParams.set("lat", String(centerLat));
       target.searchParams.set("lon", String(centerLon));
       target.searchParams.set("radius", "5000");
+      target.searchParams.set("distance_sort", "true");
     }
-    target.searchParams.set("countrycode", countryCode.toUpperCase());
     target.searchParams.set("limit", "50");
     target.searchParams.set("lang", "en");
     target.searchParams.set("osm_tag", tag);
