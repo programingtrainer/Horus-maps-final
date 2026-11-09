@@ -121,6 +121,57 @@ object HorusMapSearchApi {
     private const val BASE_URL = "${BuildConfig.HORUS_API_BASE_URL}/v1/search"
     private const val USER_AGENT = "HorusMaps-Android/0.1"
 
+    private data class LongitudeArc(
+        val west: Double,
+        val east: Double,
+        val center: Double,
+        val span: Double
+    )
+
+    /**
+     * Finds the smallest longitude interval containing every geometry point.
+     * A plain min/max fails for polygons crossing the antimeridian: -179° and
+     * +179° are only 2° apart, not 358° apart.
+     */
+    private fun longitudeArc(points: List<Pair<Double, Double>>): LongitudeArc {
+        val longitudes = points.map { (longitude, _) ->
+            ((longitude % 360.0) + 360.0) % 360.0
+        }.sorted()
+
+        if (longitudes.size == 1) {
+            val value = normalizeLongitude(longitudes.first())
+            return LongitudeArc(value, value, value, 0.0)
+        }
+
+        var largestGap = -1.0
+        var gapIndex = 0
+        for (index in longitudes.indices) {
+            val current = longitudes[index]
+            val next = if (index == longitudes.lastIndex) longitudes[0] + 360.0 else longitudes[index + 1]
+            val gap = next - current
+            if (gap > largestGap) {
+                largestGap = gap
+                gapIndex = index
+            }
+        }
+
+        val start = longitudes[(gapIndex + 1) % longitudes.size]
+        val span = (360.0 - largestGap).coerceIn(0.0, 360.0)
+        val end = (start + span) % 360.0
+        val center = (start + span / 2.0) % 360.0
+        return LongitudeArc(
+            west = normalizeLongitude(start),
+            east = normalizeLongitude(end),
+            center = normalizeLongitude(center),
+            span = span
+        )
+    }
+
+    private fun normalizeLongitude(longitude: Double): Double {
+        val normalized = ((longitude + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
+        return if (normalized == -180.0 && longitude > 0.0) 180.0 else normalized
+    }
+
     fun localContinent(context: android.content.Context, query: String): HorusGeoSearchResult? {
         val value = normalizeSearchText(query)
         val aliases = mapOf(
@@ -146,8 +197,7 @@ object HorusMapSearchApi {
                 val points = mutableListOf<Pair<Double, Double>>()
                 collectCoordinates(geometry.optJSONArray("coordinates"), points)
                 if (points.isEmpty()) continue
-                val minLon = points.minOf { it.first }
-                val maxLon = points.maxOf { it.first }
+                val longitudeArc = longitudeArc(points)
                 val minLat = points.minOf { it.second }
                 val maxLat = points.maxOf { it.second }
                 val displayName = properties.optString("name_ar", properties.optString("name_en", continent))
@@ -156,13 +206,13 @@ object HorusMapSearchApi {
                     name = displayName,
                     displayName = displayName,
                     latitude = (minLat + maxLat) / 2.0,
-                    longitude = (minLon + maxLon) / 2.0,
+                    longitude = longitudeArc.center,
                     geometryGeoJson = JSONObject()
                         .put("type", "Feature")
                         .put("geometry", geometry)
                         .put("properties", properties)
                         .toString(),
-                    bounds = HorusGeoBounds(minLat, maxLat, minLon, maxLon),
+                    bounds = HorusGeoBounds(minLat, maxLat, longitudeArc.west, longitudeArc.east),
                     kind = "continent"
                 )
             }
@@ -198,12 +248,11 @@ object HorusMapSearchApi {
                     val points = mutableListOf<Pair<Double, Double>>()
                     collectCoordinates(coordinates, points)
                     if (points.isEmpty()) continue
-                    val minLon = points.minOf { it.first }
-                    val maxLon = points.maxOf { it.first }
+                    val longitudeArc = longitudeArc(points)
                     val minLat = points.minOf { it.second }
                     val maxLat = points.maxOf { it.second }
                     val centerLat = (minLat + maxLat) / 2.0
-                    val centerLon = (minLon + maxLon) / 2.0
+                    val centerLon = longitudeArc.center
                     val display = properties.optString("display_name", properties.optString("name", query))
                     add(
                         HorusGeoSearchResult(
@@ -217,8 +266,8 @@ object HorusMapSearchApi {
                                 .put("geometry", geometry)
                                 .put("properties", JSONObject().put("name", properties.optString("name")))
                                 .toString(),
-                            bounds = if (maxLat - minLat > 0.0001 || maxLon - minLon > 0.0001) {
-                                HorusGeoBounds(minLat, maxLat, minLon, maxLon)
+                            bounds = if (maxLat - minLat > 0.0001 || longitudeArc.span > 0.0001) {
+                                HorusGeoBounds(minLat, maxLat, longitudeArc.west, longitudeArc.east)
                             } else null,
                             kind = properties.optString("type", properties.optString("category", "place"))
                         )
