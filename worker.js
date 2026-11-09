@@ -170,7 +170,7 @@ function levenshteinDistance(left, right) {
   return previous[b.length];
 }
 
-const KNOWN_SEARCH_WORDS = ["carrefour", "panda", "danube", "othaim", "nahdi", "lulu"];
+const KNOWN_SEARCH_WORDS = ["carrefour", "panda", "danube", "othaim", "nahdi", "lulu", "walmart", "tesco", "aldi", "lidl", "costco"];
 function correctKnownSearchTerms(query) {
   return String(query || "").replace(/[\p{L}\p{N}]+/gu, token => {
     const normalized = normalizeSearchText(token);
@@ -947,7 +947,13 @@ export default {
           const queryWords = query.split(/\s+/).filter(Boolean);
           query = queryWords.slice(0, Math.max(0, queryWords.length - countryScope.matchedWords)).join(" ").trim();
         }
-        const placeScope = !countryScope && query
+        const queryTokens = normalizeSearchText(query).split(" ").filter(Boolean);
+        const containsKnownBrand = queryTokens.some(token =>
+          KNOWN_SEARCH_WORDS.some(brand =>
+            token === brand || (token.length >= 4 && levenshteinDistance(token, brand) <= 1)
+          )
+        );
+        const placeScope = !countryScope && query && !containsKnownBrand
           ? await resolvePlaceScope(query, latitude, longitude)
           : null;
         if (placeScope) countryCode = placeScope.countryCode;
