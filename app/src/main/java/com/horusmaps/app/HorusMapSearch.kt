@@ -35,7 +35,7 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
             val value = normalize(raw)
             val generic = when (category) {
                 MOSQUE -> listOf("مسجد", "مساجد", "جامع", "جوامع", "mosque", "mosques", "masjid")
-                listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "supermarket", "grocery", "بنده", "panda", "كارفور", "carrefour", "لولو", "lulu", "دانوب", "danube", "العثيم", "othaim").any { value.contains(it) } -> SUPERMARKET
+                SUPERMARKET -> listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "supermarket", "grocery")
                 HOSPITAL -> listOf("مستشفى", "مستشفيات", "hospital", "hospitals")
                 PHARMACY -> listOf("صيدلية", "صيدليات", "pharmacy", "pharmacies")
                 RESTAURANT -> listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه")
