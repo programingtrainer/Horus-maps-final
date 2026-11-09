@@ -297,13 +297,16 @@ export default {
             longitude - delta, latitude + delta, longitude + delta, latitude - delta
           ].join(","));
         }
-        const response = await fetch(target.toString(), {
-          headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
-          signal: AbortSignal.timeout(18000)
-        });
         let payload = null;
-        if (response.ok) {
-          payload = await response.json();
+        try {
+          const response = await fetch(target.toString(), {
+            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+            signal: AbortSignal.timeout(12000)
+          });
+          if (response.ok) payload = await response.json();
+          else console.warn("[HorusSearch] Nominatim returned HTTP", response.status);
+        } catch (error) {
+          console.warn("[HorusSearch] Nominatim unavailable; trying fallback", String(error?.message || error).slice(0, 120));
         }
 
         // Nominatim may throttle or return no matches for some names. Photon is
