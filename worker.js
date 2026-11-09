@@ -319,13 +319,19 @@ async function resolveCountryScope(query) {
   return null;
 }
 
-async function queryPhotonCountry(countryCode, category, query) {
+async function queryPhotonCountry(countryCode, category, query, centerLat, centerLon) {
   const tags = PHOTON_TAGS[category] || [];
   const searchText = photonSearchText(correctKnownSearchTerms(query));
   if (!tags.length || !searchText) return [];
   const attempts = tags.map(async tag => {
-    const target = new URL("https://photon.komoot.io/api/");
-    target.searchParams.set("q", searchText);
+    const target = new URL(searchText ? "https://photon.komoot.io/api/" : "https://photon.komoot.io/reverse");
+    if (searchText) {
+      target.searchParams.set("q", searchText);
+    } else {
+      target.searchParams.set("lat", String(centerLat));
+      target.searchParams.set("lon", String(centerLon));
+      target.searchParams.set("radius", "5000");
+    }
     target.searchParams.set("countrycode", countryCode.toLowerCase());
     target.searchParams.set("limit", "50");
     target.searchParams.set("lang", "en");
@@ -717,8 +723,10 @@ export default {
             } catch (overpassError) {
               console.warn("[HorusSearch] Country Overpass unavailable; trying Photon", String(overpassError?.message || overpassError).slice(0, 160));
             }
-            if (elements.length === 0 && query) {
-              elements = await queryPhotonCountry(countryCode, category, query);
+            if (elements.length === 0) {
+              elements = await queryPhotonCountry(
+                countryCode, category, query, sortLatitude, sortLongitude
+              );
             }
           } else {
             try {
