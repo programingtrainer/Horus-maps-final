@@ -1095,142 +1095,77 @@ export default {
         return await cachedJson(env, cacheKey, 900, async () => {
           let elements = [];
           let usedRadius = globalCountrySearch || placeScope ? 0 : 25000;
+
           if (placeScope) {
-            try {
-              elements = await queryOverpassPlaceScope(placeScope, category);
-            } catch (scopeError) {
-              console.warn("[HorusSearch] Administrative-area search unavailable", String(scopeError?.message || scopeError).slice(0, 160));
-            }
-            if (elements.length === 0) {
-              const countryFallback = await queryPhotonCountry(
-                countryCode, category, "", sortLatitude, sortLongitude
-              );
-              if (placeScope.bounds) {
-                const { south, north, west, east } = placeScope.bounds;
-                elements = countryFallback.filter(item => {
-                  const lat = Number(item.lat ?? item.center?.lat);
-                  const lon = Number(item.lon ?? item.center?.lon);
-                  return lat >= south && lat <= north && lon >= west && lon <= east;
-                });
-              } else {
-                elements = countryFallback.filter(item =>
+            const regionalProviders = [
+              () => queryOverpassPlaceScope(placeScope, category),
+              async () => {
+                const countryResults = await queryPhotonCountry(
+                  countryCode, category, "", sortLatitude, sortLongitude
+                );
+                if (placeScope.bounds) {
+                  const { south, north, west, east } = placeScope.bounds;
+                  return countryResults.filter(item => {
+                    const lat = Number(item.lat ?? item.center?.lat);
+                    const lon = Number(item.lon ?? item.center?.lon);
+                    return lat >= south && lat <= north && lon >= west && lon <= east;
+                  });
+                }
+                return countryResults.filter(item =>
                   haversineMeters(sortLatitude, sortLongitude, Number(item.lat), Number(item.lon)) <= 15000
                 );
-              }
-              if (elements.length === 0) {
-                try {
-                  elements = await queryNominatimPlaces(category, "", sortLatitude, sortLongitude, {
-                    bounds: placeScope.bounds
-                  });
-                } catch (nominatimError) {
-                  console.warn("[HorusSearch] Regional Nominatim fallback unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
-                }
-              }
-            }
+              },
+              () => queryNominatimPlaces(category, "", sortLatitude, sortLongitude, {
+                bounds: placeScope.bounds
+              })
+            ];
+            elements = await collectProviderResults("regional search", regionalProviders);
             elements = elements.map(item => ({ ...item, __horusScopeRank: 0 }));
           } else if (globalCountrySearch) {
-            if (!query) {
-              elements = await queryPhotonCountry(countryCode, category, query, sortLatitude, sortLongitude);
-            } else {
-              try {
-                elements = await queryOverpassCountry(countryCode, category, query);
-              } catch (overpassError) {
-                console.warn("[HorusSearch] Country Overpass unavailable; trying Photon", String(overpassError?.message || overpassError).slice(0, 160));
-              }
-              if (elements.length === 0) {
-                elements = await queryPhotonCountry(countryCode, category, query, sortLatitude, sortLongitude);
-              }
-            }
-            if (elements.length === 0) {
-              try {
-                elements = await queryNominatimPlaces(category, query, sortLatitude, sortLongitude, {
-                  countryCode
-                });
-              } catch (nominatimError) {
-                console.warn("[HorusSearch] Country Nominatim fallback unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
-              }
-            }
+            const countryProviders = [];
+            if (query) countryProviders.push(() => queryOverpassCountry(countryCode, category, query));
+            countryProviders.push(
+              () => queryPhotonCountry(countryCode, category, query, sortLatitude, sortLongitude),
+              () => queryNominatimPlaces(category, query, sortLatitude, sortLongitude, { countryCode })
+            );
+            elements = await collectProviderResults("country search", countryProviders);
             elements = elements.map(item => ({ ...item, __horusScopeRank: 1 }));
           } else {
-            let nearbyElements = [];
-            try {
-              for (const radius of [10000, 25000]) {
-                usedRadius = radius;
-                nearbyElements = await queryOverpass(latitude, longitude, countryCode, category, query, radius);
-                if (nearbyElements.length >= 5 || radius === 25000) break;
-              }
-            } catch (overpassError) {
-              console.warn("[HorusSearch] Nearby Overpass unavailable", String(overpassError?.message || overpassError).slice(0, 160));
-            }
-            if (nearbyElements.length === 0) {
-              try {
-                nearbyElements = await queryPhoton(latitude, longitude, category, query, 25000);
-              } catch (photonError) {
-                console.warn("[HorusSearch] Nearby Photon unavailable", String(photonError?.message || photonError).slice(0, 140));
-              }
-            }
-            if (nearbyElements.length === 0) {
-              const latDelta = 25000 / 111320;
-              const lonDelta = 25000 / (111320 * Math.max(0.2, Math.cos(latitude * Math.PI / 180)));
-              try {
-                nearbyElements = await queryNominatimPlaces(category, query, latitude, longitude, {
-                  bounds: {
-                    south: latitude - latDelta,
-                    north: latitude + latDelta,
-                    west: longitude - lonDelta,
-                    east: longitude + lonDelta
-                  }
-                });
-              } catch (nominatimError) {
-                console.warn("[HorusSearch] Nearby Nominatim fallback unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
-              }
-            }
+            const latDelta = 25000 / 111320;
+            const lonDelta = 25000 / (111320 * Math.max(0.2, Math.cos(latitude * Math.PI / 180)));
+            const localBounds = {
+              south: latitude - latDelta,
+              north: latitude + latDelta,
+              west: longitude - lonDelta,
+              east: longitude + lonDelta
+            };
+            const nearbyProviders = [
+              () => queryOverpass(latitude, longitude, countryCode, category, query, 25000),
+              () => queryPhoton(latitude, longitude, category, query, 25000),
+              () => queryNominatimPlaces(category, query, latitude, longitude, { bounds: localBounds })
+            ];
+            const nearbyElements = await collectProviderResults("nearby search", nearbyProviders);
             elements = nearbyElements.map(item => ({ ...item, __horusScopeRank: 0 }));
 
-            // Expand from nearby matches to the rest of the user's country,
-            // then to other countries only when the local/country result set is sparse.
+            // If nearby matches are sparse, expand to the rest of the user's
+            // country before searching the wider world.
             if (elements.length < 5) {
-              let countryElements = [];
-              try {
-                countryElements = !query
-                  ? await queryPhotonCountry(countryCode, category, "", latitude, longitude)
-                  : await queryOverpassCountry(countryCode, category, query);
-              } catch (countryError) {
-                console.warn("[HorusSearch] Country expansion unavailable", String(countryError?.message || countryError).slice(0, 150));
-              }
-              if (countryElements.length === 0) {
-                try {
-                  countryElements = await queryPhotonCountry(countryCode, category, query, latitude, longitude);
-                } catch (photonError) {
-                  console.warn("[HorusSearch] Country Photon fallback unavailable", String(photonError?.message || photonError).slice(0, 120));
-                }
-              }
-              if (countryElements.length === 0) {
-                try {
-                  countryElements = await queryNominatimPlaces(category, query, latitude, longitude, {
-                    countryCode
-                  });
-                } catch (nominatimError) {
-                  console.warn("[HorusSearch] Country Nominatim expansion unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
-                }
-              }
+              const countryProviders = [];
+              if (query) countryProviders.push(() => queryOverpassCountry(countryCode, category, query));
+              countryProviders.push(
+                () => queryPhotonCountry(countryCode, category, query, latitude, longitude),
+                () => queryNominatimPlaces(category, query, latitude, longitude, { countryCode })
+              );
+              const countryElements = await collectProviderResults("country expansion", countryProviders);
               elements.push(...countryElements.map(item => ({ ...item, __horusScopeRank: 1 })));
             }
 
             if (elements.length < 5) {
-              let globalElements = [];
-              try {
-                globalElements = await queryPhotonGlobal(category, query, latitude, longitude);
-              } catch (globalError) {
-                console.warn("[HorusSearch] Global Photon fallback unavailable", String(globalError?.message || globalError).slice(0, 140));
-              }
-              if (globalElements.length === 0) {
-                try {
-                  globalElements = await queryNominatimPlaces(category, query, latitude, longitude);
-                } catch (nominatimError) {
-                  console.warn("[HorusSearch] Global Nominatim fallback unavailable", String(nominatimError?.message || nominatimError).slice(0, 140));
-                }
-              }
+              const globalProviders = [
+                () => queryPhotonGlobal(category, query, latitude, longitude),
+                () => queryNominatimPlaces(category, query, latitude, longitude)
+              ];
+              const globalElements = await collectProviderResults("global expansion", globalProviders);
               elements.push(...globalElements.map(item => ({ ...item, __horusScopeRank: 2 })));
             }
           }
