@@ -523,6 +523,7 @@ class MainActivity : ComponentActivity() {
                 var searchQuery by remember { mutableStateOf("") }
                 var searchExpanded by remember { mutableStateOf(false) }
                 var searchLoading by remember { mutableStateOf(false) }
+                var searchHasRun by remember { mutableStateOf(false) }
                 var searchError by remember { mutableStateOf<String?>(null) }
                 var selectedSearchCategory by remember { mutableStateOf<HorusSearchCategory?>(null) }
                 var geographySearchResults by remember { mutableStateOf<List<HorusGeoSearchResult>>(emptyList()) }
@@ -859,6 +860,7 @@ class MainActivity : ComponentActivity() {
                     }
                     selectedSearchCategory = category
                     searchLoading = true
+                    searchHasRun = true
                     searchError = null
                     geographySearchResults = emptyList()
                     nearbySearchResults = emptyList()
@@ -1034,11 +1036,13 @@ class MainActivity : ComponentActivity() {
                             query = searchQuery,
                             onQueryChange = { value ->
                                 searchQuery = value
+                                searchHasRun = false
                                 searchError = null
                             },
                             expanded = searchExpanded,
                             onExpandedChange = { searchExpanded = it },
                             loading = searchLoading,
+                            hasSearched = searchHasRun,
                             error = searchError,
                             selectedCategory = selectedSearchCategory,
                             geographyResults = geographySearchResults,
@@ -1046,6 +1050,7 @@ class MainActivity : ComponentActivity() {
                             onCategorySelected = { category ->
                                 selectedSearchCategory = category
                                 searchQuery = ""
+                                searchHasRun = false
                                 searchError = null
                                 geographySearchResults = emptyList()
                                 nearbySearchResults = emptyList()
@@ -1057,6 +1062,7 @@ class MainActivity : ComponentActivity() {
                             onClose = {
                                 searchExpanded = false
                                 searchQuery = ""
+                                searchHasRun = false
                                 searchError = null
                                 selectedSearchCategory = null
                                 geographySearchResults = emptyList()
