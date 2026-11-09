@@ -249,7 +249,7 @@ async function queryOverpass(lat, lon, countryCode, category, query, radius) {
   throw lastError || new Error("Overpass unavailable");
 }
 
-\nexport default {
+export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
@@ -388,7 +388,7 @@ async function queryOverpass(lat, lon, countryCode, category, query, radius) {
         return json({ ok: false, error: "تعذر تحميل الأماكن القريبة الآن. حاول مرة أخرى." }, 503);
       }
     }
-\n    if (url.pathname === "/v1/auth/email-availability" && request.method === "POST") {
+    if (url.pathname === "/v1/auth/email-availability" && request.method === "POST") {
       if (!env.HORUS_USERS) return json({ ok: false, error: "Database unavailable" }, 503);
       let registerStage = "request_parse";
       try {
