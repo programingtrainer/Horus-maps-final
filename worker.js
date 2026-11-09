@@ -115,7 +115,133 @@ async function getAuthenticatedUser(request, env) {
   ).bind(tokenHash, new Date().toISOString()).first();
 }
 
-export default {
+
+const SEARCH_USER_AGENT = "HorusMaps/0.1 (Android map search; https://github.com/programingtrainer/Horus-maps-final)";
+const SEARCH_OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.nchc.org.tw/api/interpreter"
+];
+
+function validCoordinate(value, min, max) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= min && number <= max ? number : null;
+}
+
+function escapeOverpassRegex(value) {
+  return String(value || "")
+    .trim()
+    .slice(0, 64)
+    .replace(/[\\^$.*+?()[\]{}|]/g, "\\export default {");
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const radians = value => value * Math.PI / 180;
+  const dLat = radians(lat2 - lat1);
+  const dLon = radians(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function cachedJson(cacheKey, ttlSeconds, producer) {
+  const cache = caches.default;
+  const cacheRequest = new Request("https://horus-search-cache.invalid/" + encodeURIComponent(cacheKey));
+  const cached = await cache.match(cacheRequest);
+  if (cached) {
+    return new Response(cached.body, {
+      status: cached.status,
+      headers: { ...Object.fromEntries(cached.headers), ...corsHeaders, "Content-Type": "application/json; charset=utf-8" }
+    });
+  }
+  const response = await producer();
+  if (response.ok) {
+    const body = await response.clone().arrayBuffer();
+    const stored = new Response(body, {
+      status: response.status,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "public, max-age=" + ttlSeconds
+      }
+    });
+    await cache.put(cacheRequest, stored);
+  }
+  return response;
+}
+
+function overpassSelectors(category, query) {
+  const escaped = escapeOverpassRegex(query);
+  const nameFilter = escaped ? '[~"^(name|brand|name:en|brand:en)$"~"' + escaped + '",i]' : "";
+  if (category === "mosque") {
+    return [
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="place_of_worship"]["religion"~"muslim|islam",i];',
+      'nwr(area.country)(around:RADIUS,LAT,LON)["building"="mosque"];'
+    ];
+  }
+  if (category === "supermarket") {
+    if (escaped) {
+      const pandaTerms = /بنده|panda/i.test(query) ? "بنده|Panda|Panda Hypermarket" : escaped;
+      const filter = '["shop"~"supermarket|convenience|department_store"][~"^(name|brand|name:en|brand:en)$"~"' + pandaTerms.replace(/"/g, "") + '",i]';
+      return ['nwr(area.country)(around:RADIUS,LAT,LON)' + filter + ';'];
+    }
+    return ['nwr(area.country)(around:RADIUS,LAT,LON)["shop"~"supermarket|convenience|department_store"];'];
+  }
+  if (category === "pharmacy") {
+    return [
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="pharmacy"];',
+      'nwr(area.country)(around:RADIUS,LAT,LON)["shop"="chemist"];'
+    ];
+  }
+  if (category === "hospital") {
+    return [
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="hospital"];',
+      'nwr(area.country)(around:RADIUS,LAT,LON)["healthcare"="hospital"];'
+    ];
+  }
+  if (category === "restaurant") {
+    return [
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="restaurant"];',
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="fast_food"];'
+    ];
+  }
+  if (category === "fuel") {
+    return ['nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="fuel"];'];
+  }
+  return [];
+}
+
+async function queryOverpass(lat, lon, countryCode, category, query, radius) {
+  const selectors = overpassSelectors(category, query)
+    .map(item => item.replaceAll("RADIUS", String(radius)).replaceAll("LAT", String(lat)).replaceAll("LON", String(lon)))
+    .join("\n");
+  const overpassQuery = '[out:json][timeout:22];area["ISO3166-1"="' + countryCode.toUpperCase() + '"]["admin_level"="2"]->.country;(' +
+    selectors + ');out center tags 80;';
+  let lastError = null;
+  for (const endpoint of SEARCH_OVERPASS_ENDPOINTS) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "User-Agent": SEARCH_USER_AGENT
+        },
+        body: "data=" + encodeURIComponent(overpassQuery),
+        signal: AbortSignal.timeout(26000)
+      });
+      if (!response.ok) {
+        lastError = new Error("Overpass HTTP " + response.status);
+        continue;
+      }
+      const data = await response.json();
+      return Array.isArray(data.elements) ? data.elements : [];
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Overpass unavailable");
+}
+
+\nexport default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
@@ -139,7 +265,122 @@ export default {
       }
     }
 
-    if (url.pathname === "/v1/auth/email-availability" && request.method === "POST") {
+
+    if (url.pathname === "/v1/search/geocode" && request.method === "GET") {
+      const query = String(url.searchParams.get("q") || "").trim().slice(0, 120);
+      if (query.length < 2) return json({ ok: false, error: "اكتب حرفين على الأقل للبحث." }, 400);
+      const latitude = validCoordinate(url.searchParams.get("lat"), -90, 90);
+      const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
+      const language = String(url.searchParams.get("lang") || "ar,en").slice(0, 32);
+      const cacheKey = "geocode:v1:" + query.toLocaleLowerCase() + ":" + language + ":" +
+        (latitude === null ? "" : latitude.toFixed(2)) + ":" + (longitude === null ? "" : longitude.toFixed(2));
+      return cachedJson(cacheKey, 86400, async () => {
+        const target = new URL("https://nominatim.openstreetmap.org/search");
+        target.searchParams.set("q", query);
+        target.searchParams.set("format", "geojson");
+        target.searchParams.set("polygon_geojson", "1");
+        target.searchParams.set("polygon_threshold", "0.003");
+        target.searchParams.set("addressdetails", "1");
+        target.searchParams.set("limit", "8");
+        target.searchParams.set("accept-language", language);
+        if (latitude !== null && longitude !== null) {
+          const delta = 3;
+          target.searchParams.set("viewbox", [
+            longitude - delta, latitude + delta, longitude + delta, latitude - delta
+          ].join(","));
+        }
+        const response = await fetch(target.toString(), {
+          headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+          signal: AbortSignal.timeout(18000)
+        });
+        if (!response.ok) return json({ ok: false, error: "تعذر البحث الجغرافي الآن." }, response.status);
+        const payload = await response.json();
+        return json({ ok: true, ...payload });
+      });
+    }
+
+    if (url.pathname === "/v1/search/reverse" && request.method === "GET") {
+      const latitude = validCoordinate(url.searchParams.get("lat"), -90, 90);
+      const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
+      if (latitude === null || longitude === null) return json({ ok: false, error: "إحداثيات الموقع غير صالحة." }, 400);
+      const cacheKey = "reverse:v1:" + latitude.toFixed(3) + ":" + longitude.toFixed(3);
+      return cachedJson(cacheKey, 86400, async () => {
+        const target = new URL("https://nominatim.openstreetmap.org/reverse");
+        target.searchParams.set("lat", String(latitude));
+        target.searchParams.set("lon", String(longitude));
+        target.searchParams.set("format", "jsonv2");
+        target.searchParams.set("zoom", "3");
+        target.searchParams.set("addressdetails", "1");
+        target.searchParams.set("accept-language", "ar,en");
+        const response = await fetch(target.toString(), {
+          headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+          signal: AbortSignal.timeout(15000)
+        });
+        if (!response.ok) return json({ ok: false, error: "تعذر تحديد الدولة من موقعك." }, response.status);
+        const payload = await response.json();
+        return json({
+          ok: true,
+          countryCode: String(payload.address?.country_code || "").toLowerCase(),
+          country: String(payload.address?.country || ""),
+          address: payload.address || {}
+        });
+      });
+    }
+
+    if (url.pathname === "/v1/search/places" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const latitude = validCoordinate(body.latitude, -90, 90);
+        const longitude = validCoordinate(body.longitude, -180, 180);
+        const countryCode = String(body.countryCode || "").trim().toUpperCase();
+        const category = String(body.category || "").trim().toLowerCase();
+        const query = String(body.query || "").trim().slice(0, 64);
+        const allowed = new Set(["mosque", "supermarket", "hospital", "pharmacy", "restaurant", "fuel"]);
+        if (latitude === null || longitude === null || !/^[A-Z]{2}$/.test(countryCode) || !allowed.has(category)) {
+          return json({ ok: false, error: "بيانات البحث عن الأماكن غير مكتملة أو غير صالحة." }, 400);
+        }
+        const cacheKey = "places:v1:" + countryCode + ":" + category + ":" + query.toLocaleLowerCase() + ":" +
+          latitude.toFixed(3) + ":" + longitude.toFixed(3);
+        return cachedJson(cacheKey, 900, async () => {
+          let elements = [];
+          let usedRadius = 15000;
+          for (const radius of [15000, 50000, 120000, 250000]) {
+            usedRadius = radius;
+            elements = await queryOverpass(latitude, longitude, countryCode, category, query, radius);
+            if (elements.length > 0) break;
+          }
+          const results = [];
+          const seen = new Set();
+          for (const element of elements) {
+            const lat = Number(element.lat ?? element.center?.lat);
+            const lon = Number(element.lon ?? element.center?.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+            const id = String(element.type || "osm") + "/" + String(element.id || "");
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const tags = element.tags || {};
+            const name = String(tags.name || tags["name:ar"] || tags.brand || tags["brand:ar"] || tags["name:en"] || "مكان بدون اسم");
+            results.push({
+              id,
+              name,
+              latitude: lat,
+              longitude: lon,
+              type: category,
+              distanceMeters: Math.round(haversineMeters(latitude, longitude, lat, lon)),
+              address: [tags["addr:street"], tags["addr:suburb"], tags["addr:city"] || tags["addr:town"]].filter(Boolean).join("، "),
+              brand: String(tags.brand || ""),
+              openingHours: String(tags.opening_hours || "")
+            });
+          }
+          results.sort((a, b) => a.distanceMeters - b.distanceMeters);
+          return json({ ok: true, countryCode: countryCode.toLowerCase(), radiusMeters: usedRadius, results: results.slice(0, 40) });
+        });
+      } catch (error) {
+        console.error("[HorusSearch] Nearby search failed", String(error?.message || error).slice(0, 220));
+        return json({ ok: false, error: "تعذر تحميل الأماكن القريبة الآن. حاول مرة أخرى." }, 503);
+      }
+    }
+\n    if (url.pathname === "/v1/auth/email-availability" && request.method === "POST") {
       if (!env.HORUS_USERS) return json({ ok: false, error: "Database unavailable" }, 503);
       let registerStage = "request_parse";
       try {
