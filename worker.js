@@ -666,6 +666,19 @@ async function queryNominatimPlaces(category, query, centerLat, centerLon, optio
   return elements;
 }
 
+async function collectProviderResults(label, providers) {
+  const settled = await Promise.allSettled(providers.map(provider => provider()));
+  const combined = [];
+  for (const result of settled) {
+    if (result.status === "fulfilled" && Array.isArray(result.value)) {
+      combined.push(...result.value);
+    } else if (result.status === "rejected") {
+      console.warn("[HorusSearch] " + label + " provider failed", String(result.reason?.message || result.reason).slice(0, 140));
+    }
+  }
+  return combined;
+}
+
 async function queryPhotonCountry(countryCode, category, query, centerLat, centerLon) {
   const tags = PHOTON_TAGS[category] || [];
   const searchText = photonSearchText(correctKnownSearchTerms(query));
