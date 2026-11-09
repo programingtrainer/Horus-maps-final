@@ -372,15 +372,16 @@ class MainActivity : ComponentActivity() {
 
     private fun showSearchBoundary(map: org.maplibre.android.maps.MapLibreMap, featureGeoJson: String) {
         searchBoundaryAnimator?.cancel()
-        searchBoundaryClearRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        searchBoundaryHandler.removeCallbacksAndMessages(null)
+        searchBoundaryClearRunnable = null
         map.getStyle { style ->
             val source = (style.getSource("horus-search-boundary") as? GeoJsonSource)
-                ?: GeoJsonSource("horus-search-boundary", featureGeoJson).also(style::addSource)
+                ?: GeoJsonSource("horus-search-boundary", featureGeoJson).also { style.addSource(it) }
             source.setGeoJson(featureGeoJson)
             val layer = (style.getLayer("horus-search-boundary-line") as? LineLayer)
                 ?: LineLayer("horus-search-boundary-line", "horus-search-boundary").apply {
                     setProperties(PropertyFactory.lineColor("#F02035"), PropertyFactory.lineWidth(3.2f), PropertyFactory.lineOpacity(1.0f))
-                }.also(style::addLayer)
+                }.also { style.addLayer(it) }
             layer.setProperties(PropertyFactory.lineColor("#F02035"), PropertyFactory.lineWidth(3.2f), PropertyFactory.lineOpacity(1.0f))
             val clear = Runnable {
                 searchBoundaryAnimator = ValueAnimator.ofFloat(1.0f, 0.0f).apply {
@@ -867,7 +868,8 @@ class MainActivity : ComponentActivity() {
                                         searchError = "للعثور على أقرب فرع داخل دولتك، اسمح لـ HorusMaps باستخدام موقعك."
                                         locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                                     } else {
-                                        searchError = "لم نتمكن من تحديد موقعك الحالي. تأكد من تشغيل GPS ثم اضغط تحديد موقعي."
+                                        searchError = "لم نتمكن من تحديد موقعك الحالي. تأكد من تشغيل GPS ثم انتظر لحظات وحاول مجددًا."
+                                        centerOnCurrentLocation(map)
                                     }
                                     return@launch
                                 }
@@ -1027,7 +1029,6 @@ class MainActivity : ComponentActivity() {
                             onQueryChange = { value ->
                                 searchQuery = value
                                 searchError = null
-                                if (selectedSearchCategory != null && HorusSearchCategory.detect(value) == null) selectedSearchCategory = null
                             },
                             expanded = searchExpanded,
                             onExpandedChange = { searchExpanded = it },
