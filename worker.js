@@ -319,6 +319,59 @@ async function resolveCountryScope(query) {
   return null;
 }
 
+async function queryPhotonCountry(countryCode, category, query) {
+  const tags = PHOTON_TAGS[category] || [];
+  const searchText = photonSearchText(correctKnownSearchTerms(query));
+  if (!tags.length || !searchText) return [];
+  const attempts = tags.map(async tag => {
+    const target = new URL("https://photon.komoot.io/api/");
+    target.searchParams.set("q", searchText);
+    target.searchParams.set("countrycode", countryCode.toLowerCase());
+    target.searchParams.set("limit", "50");
+    target.searchParams.set("lang", "en");
+    target.searchParams.set("osm_tag", tag);
+    const response = await fetch(target.toString(), {
+      headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) throw new Error("Photon country search HTTP " + response.status);
+    const payload = await response.json();
+    if (!Array.isArray(payload.features)) throw new Error("Photon country search returned invalid data");
+    return payload.features;
+  });
+  const settled = await Promise.allSettled(attempts);
+  const seen = new Set();
+  const elements = [];
+  for (const result of settled) {
+    if (result.status !== "fulfilled") continue;
+    for (const feature of result.value) {
+      const properties = feature.properties || {};
+      if (String(properties.countrycode || "").toUpperCase() !== countryCode) continue;
+      const coordinates = feature.geometry?.coordinates || [];
+      const lat = Number(coordinates[1]), lon = Number(coordinates[0]);
+      const osmType = String(properties.osm_type || "N");
+      const osmId = String(properties.osm_id || "");
+      const id = osmType + "/" + osmId;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || !osmId || seen.has(id)) continue;
+      seen.add(id);
+      const tagsForElement = { ...(properties.extra || {}) };
+      if (properties.name) tagsForElement.name = properties.name;
+      if (properties.brand) tagsForElement.brand = properties.brand;
+      if (properties.city || properties.town || properties.village) tagsForElement["addr:city"] = properties.city || properties.town || properties.village;
+      if (properties.osm_key && properties.osm_value) tagsForElement[properties.osm_key] = properties.osm_value;
+      elements.push({
+        type: osmType === "W" ? "way" : osmType === "R" ? "relation" : "node",
+        id: osmId,
+        lat,
+        lon,
+        tags: tagsForElement
+      });
+    }
+  }
+  console.info("[HorusSearch] Photon country fallback completed", countryCode, category, elements.length);
+  return elements;
+}
+
 async function queryOverpassCountry(countryCode, category, query) {
   const selectors = overpassSelectors(category, query)
     .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(area.searchArea)"))
@@ -659,7 +712,14 @@ export default {
           let elements = [];
           let usedRadius = globalCountrySearch ? 0 : 25000;
           if (globalCountrySearch) {
-            elements = await queryOverpassCountry(countryCode, category, query);
+            try {
+              elements = await queryOverpassCountry(countryCode, category, query);
+            } catch (overpassError) {
+              console.warn("[HorusSearch] Country Overpass unavailable; trying Photon", String(overpassError?.message || overpassError).slice(0, 160));
+            }
+            if (elements.length === 0 && query) {
+              elements = await queryPhotonCountry(countryCode, category, query);
+            }
           } else {
             try {
               for (const radius of [10000, 25000]) {
