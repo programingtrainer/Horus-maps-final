@@ -442,7 +442,7 @@ async function resolvePlaceScope(query, nearLat, nearLon) {
 }
 
 async function queryOverpassPlaceScope(scope, category) {
-  const isRelationArea = scope.osmType === "relation" && /^\\d+$/.test(scope.osmId) && scope.category === "boundary";
+  const isRelationArea = scope.osmType === "relation" && /^\d+$/.test(scope.osmId) && scope.category === "boundary";
   let selectors;
   let overpassQuery;
 
@@ -450,13 +450,13 @@ async function queryOverpassPlaceScope(scope, category) {
     const areaId = Number(scope.osmId) + 3600000000;
     selectors = overpassSelectors(category, "")
       .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(area.searchArea)"))
-      .join("\\n");
+      .join("\n");
     overpassQuery = '[out:json][timeout:18];area(' + areaId + ')->.searchArea;(' + selectors + ');out center tags 100;';
   } else if (scope.bounds) {
     const { south, north, west, east } = scope.bounds;
     selectors = overpassSelectors(category, "")
       .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(" + south + "," + west + "," + north + "," + east + ")"))
-      .join("\\n");
+      .join("\n");
     overpassQuery = '[out:json][timeout:18];(' + selectors + ');out center tags 100;';
   } else {
     const radius = scope.type === "city" || scope.type === "town" ? 12000 : 4500;
@@ -935,7 +935,7 @@ export default {
         const globalCountrySearch = Boolean(countryScope);
         if (countryScope) {
           countryCode = countryScope.countryCode;
-          const queryWords = query.split(/\\s+/).filter(Boolean);
+          const queryWords = query.split(/\s+/).filter(Boolean);
           query = queryWords.slice(0, Math.max(0, queryWords.length - countryScope.matchedWords)).join(" ").trim();
         }
         const placeScope = !countryScope && query
