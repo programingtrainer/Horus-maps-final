@@ -390,12 +390,14 @@ async function resolvePlaceScope(query, nearLat, nearLon) {
     const allowedTypes = new Set([
       "city", "town", "village", "hamlet", "suburb", "neighbourhood", "quarter",
       "district", "county", "state", "province", "municipality", "administrative",
-      "locality", "isolated_dwelling", "borough"
+      "locality", "isolated_dwelling", "borough", "residential", "primary",
+      "secondary", "tertiary", "unclassified", "service", "pedestrian",
+      "living_street", "road"
     ]);
     const candidate = (Array.isArray(payload) ? payload : []).find(item => {
       const category = String(item.class || item.category || "").toLowerCase();
       const type = String(item.type || "").toLowerCase();
-      return (category === "place" || category === "boundary") && allowedTypes.has(type) &&
+      return ["place", "boundary", "highway"].includes(category) && allowedTypes.has(type) &&
         /^[a-z]{2}$/i.test(String(item.address?.country_code || ""));
     });
     if (!candidate) return null;
@@ -579,6 +581,9 @@ async function queryPhotonCountry(countryCode, category, query, centerLat, cente
       if (properties.name) tagsForElement.name = properties.name;
       if (properties.brand) tagsForElement.brand = properties.brand;
       if (properties.city || properties.town || properties.village) tagsForElement["addr:city"] = properties.city || properties.town || properties.village;
+      if (properties.state || properties.county) tagsForElement["addr:state"] = properties.state || properties.county;
+      if (properties.country) tagsForElement["addr:country"] = properties.country;
+      if (properties.suburb || properties.district) tagsForElement["addr:suburb"] = properties.suburb || properties.district;
       if (properties.osm_key && properties.osm_value) tagsForElement[properties.osm_key] = properties.osm_value;
       elements.push({
         type: osmType === "W" ? "way" : osmType === "R" ? "relation" : "node",
