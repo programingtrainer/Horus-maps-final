@@ -685,16 +685,27 @@ async function queryNominatimPlaces(category, query, centerLat, centerLon, optio
 }
 
 async function collectProviderResults(label, providers) {
-  const settled = await Promise.allSettled(providers.map(provider => provider()));
-  const combined = [];
-  for (const result of settled) {
-    if (result.status === "fulfilled" && Array.isArray(result.value)) {
-      combined.push(...result.value);
-    } else if (result.status === "rejected") {
-      console.warn("[HorusSearch] " + label + " provider failed", String(result.reason?.message || result.reason).slice(0, 140));
+  const attempts = providers.map(async provider => {
+    const result = await provider();
+    if (!Array.isArray(result) || result.length === 0) {
+      throw new Error("provider returned no matches");
     }
+    return result;
+  });
+  try {
+    // Return as soon as one independent provider supplies usable results.
+    // This prevents a slow or unavailable mirror from delaying live search.
+    return await Promise.any(attempts);
+  } catch (error) {
+    const failures = Array.isArray(error?.errors) ? error.errors : [error];
+    const details = failures
+      .map(item => String(item?.message || item))
+      .filter(message => message !== "provider returned no matches")
+      .slice(0, 3)
+      .join("; ");
+    if (details) console.warn("[HorusSearch] " + label + " providers unavailable", details.slice(0, 180));
+    return [];
   }
-  return combined;
 }
 
 async function queryPhotonCountry(countryCode, category, query, centerLat, centerLon) {
