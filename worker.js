@@ -284,7 +284,7 @@ async function resolveCountryScope(query) {
     const target = new URL("https://photon.komoot.io/api/");
     target.searchParams.set("q", suffix);
     target.searchParams.set("limit", "8");
-    target.searchParams.set("lang", /[\\u0600-\\u06FF]/.test(suffix) ? "ar" : "en");
+    target.searchParams.set("lang", /[\u0600-\u06FF]/.test(suffix) ? "ar" : "en");
     target.searchParams.set("layer", "country");
     try {
       const response = await fetch(target.toString(), {
