@@ -40,7 +40,8 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
                 RESTAURANT -> setOf("مطعم", "مطاعم", "restaurant", "restaurants", "fast", "food", "cafe", "coffee", "shop", "كافيه", "مقهى", "مقاهي")
                 FUEL -> setOf("محطة", "محطات", "وقود", "بنزين", "محروقات", "تعبئة", "fuel", "gas", "station", "stations", "petrol", "gasoline", "filling")
             }.map(::normalize).toSet()
-            return normalize(raw).split(" ").filter { token -> token.isNotBlank() && genericTokens.none { generic -> token == generic || (token.length >= 4 && levenshtein(token, generic) <= 1) } }.joinToString(" ")
+            val ignoredTokens = genericTokens + setOf("في", "داخل", "in", "at", "near", "within", "بدولة", "دولة", "country").map(::normalize)
+            return normalize(raw).split(" ").filter { token -> token.isNotBlank() && ignoredTokens.none { generic -> token == generic || (token.length >= 4 && levenshtein(token, generic) <= 1) } }.joinToString(" ")
         }
 
         private fun matchesTerm(value: String, term: String): Boolean {
