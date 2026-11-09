@@ -26,7 +26,7 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
                 listOf("مستشفى", "مستشفي", "مستشفيات", "مستشفيّات", "مركز طبي", "مركز صحي", "مراكز طبية", "hospital", "hospitals", "clinic", "medical center", "medical centre", "healthcare").any { matchesTerm(value, it) } -> HOSPITAL
                 listOf("صيدلية", "صيدليه", "صيدليات", "صيدليات", "صيدليه", "pharmacy", "pharmacies", "chemist", "drugstore", "drug store").any { matchesTerm(value, it) } -> PHARMACY
                 listOf("مطعم", "مطاعم", "مطعم وجبات سريعة", "restaurant", "restaurants", "fast food", "cafe", "coffee shop", "كافيه", "مقهى", "مقاهي").any { matchesTerm(value, it) } -> RESTAURANT
-                listOf("محطة وقود", "محطات وقود", "محطة بنزين", "محطات بنزين", "محطة محروقات", "محطات المحروقات", "بنزين", "وقود", "محروقات", "تعبئة وقود", "fuel", "fuel station", "gas station", "gas stations", "petrol station", "petrol stations", "filling station", "gasoline").any { matchesTerm(value, it) } -> FUEL
+                listOf("محطة وقود", "محطات وقود", "محطة بنزين", "محطات بنزين", "محطة بترول", "محطات بترول", "محطة محروقات", "محطات المحروقات", "بنزين", "بنزينة", "بنزينه", "بترول", "وقود", "محروقات", "تعبئة وقود", "fuel", "fuel station", "gas station", "gas stations", "petrol station", "petrol stations", "filling station", "gasoline station", "service station", "petrol pump", "gasoline").any { matchesTerm(value, it) } -> FUEL
                 else -> null
             }
         }
@@ -38,7 +38,7 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
                 HOSPITAL -> setOf("مستشفى", "مستشفي", "مستشفيات", "مركز", "طبي", "صحي", "hospital", "hospitals", "clinic", "medical", "center", "centre", "healthcare")
                 PHARMACY -> setOf("صيدلية", "صيدليه", "صيدليات", "pharmacy", "pharmacies", "chemist", "drugstore", "drug", "store")
                 RESTAURANT -> setOf("مطعم", "مطاعم", "restaurant", "restaurants", "fast", "food", "cafe", "coffee", "shop", "كافيه", "مقهى", "مقاهي")
-                FUEL -> setOf("محطة", "محطات", "وقود", "بنزين", "محروقات", "تعبئة", "fuel", "gas", "station", "stations", "petrol", "gasoline", "filling")
+                FUEL -> setOf("محطة", "محطات", "وقود", "بنزين", "بنزينة", "بنزينه", "بترول", "محروقات", "تعبئة", "fuel", "gas", "station", "stations", "petrol", "gasoline", "filling", "service", "pump")
             }.map(::normalize).toSet()
             val ignoredTokens = genericTokens + setOf("في", "داخل", "in", "at", "near", "within", "بدولة", "دولة", "country").map(::normalize)
             return normalize(raw).split(" ").filter { token -> token.isNotBlank() && ignoredTokens.none { generic -> token == generic || (token.length >= 4 && levenshtein(token, generic) <= 1) } }.joinToString(" ")
