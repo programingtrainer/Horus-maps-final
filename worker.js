@@ -427,7 +427,7 @@ async function queryOverpassCountry(countryCode, category, query) {
   const selectors = overpassSelectors(category, query)
     .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(area.searchArea)"))
     .join("\n");
-  const overpassQuery = '[out:json][timeout:20];rel["ISO3166-1"="' + countryCode + '"]["admin_level"="2"]->.country;map_to_area.country->.searchArea;(' + selectors + ');out center tags 80;';
+  const overpassQuery = '[out:json][timeout:20];area["ISO3166-1"="' + countryCode + '"]["admin_level"="2"]->.searchArea;(' + selectors + ');out center tags 80;';
   const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
     const response = await fetch(endpoint, {
       method: "POST",
