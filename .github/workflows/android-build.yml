@@ -117,6 +117,39 @@ jobs:
             throw new Error("Typo-tolerant Panda search smoke test failed.");
           }
 
+          const fuelResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "fuel", query: "" }),
+            signal: AbortSignal.timeout(40000)
+          });
+          const fuel = await fuelResponse.json();
+          if (!fuelResponse.ok || !fuel.ok || !Array.isArray(fuel.results) || fuel.results.length === 0) {
+            throw new Error("Nearby fuel station smoke test failed: HTTP " + fuelResponse.status + ", error=" + (fuel.error || "no results"));
+          }
+
+          const hospitalResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "hospital", query: "" }),
+            signal: AbortSignal.timeout(40000)
+          });
+          const hospitals = await hospitalResponse.json();
+          if (!hospitalResponse.ok || !hospitals.ok || !Array.isArray(hospitals.results) || hospitals.results.length === 0) {
+            throw new Error("Nearby hospital smoke test failed: HTTP " + hospitalResponse.status + ", error=" + (hospitals.error || "no results"));
+          }
+
+          const egyptCarrefourResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "supermarket", query: "Carrefour Egypt" }),
+            signal: AbortSignal.timeout(55000)
+          });
+          const egyptCarrefour = await egyptCarrefourResponse.json();
+          if (!egyptCarrefourResponse.ok || !egyptCarrefour.ok || egyptCarrefour.countryCode !== "eg" || egyptCarrefour.searchScope !== "country") {
+            throw new Error("Cross-country Carrefour Egypt smoke test failed: HTTP " + egyptCarrefourResponse.status + ", country=" + egyptCarrefour.countryCode + ", scope=" + egyptCarrefour.searchScope + ", error=" + (egyptCarrefour.error || "no country-scoped results"));
+          }
+
           const pharmacyResponse = await fetch(base + "/v1/search/places", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -136,6 +169,10 @@ jobs:
             nearbySupermarkets: places.results.length,
             pandaMatches: panda.results.length,
             typoPandaMatches: typoPanda.results.length,
+            nearbyFuelStations: fuel.results.length,
+            nearbyHospitals: hospitals.results.length,
+            egyptCarrefourBranches: egyptCarrefour.results.length,
+            egyptSearchScope: egyptCarrefour.searchScope,
             nearbyPharmacies: pharmacies.results.length
           }));
           NODE
