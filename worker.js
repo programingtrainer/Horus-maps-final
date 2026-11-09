@@ -366,7 +366,7 @@ async function resolveCountryScope(query) {
 async function queryPhotonCountry(countryCode, category, query, centerLat, centerLon) {
   const tags = PHOTON_TAGS[category] || [];
   const searchText = photonSearchText(correctKnownSearchTerms(query));
-  if (!tags.length || !searchText) return [];
+  if (!tags.length) return [];
   const attempts = tags.map(async tag => {
     const target = new URL(searchText ? "https://photon.komoot.io/api/" : "https://photon.komoot.io/reverse");
     if (searchText) {
