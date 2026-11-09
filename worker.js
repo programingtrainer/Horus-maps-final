@@ -294,6 +294,20 @@ const COUNTRY_CENTERS = {
   AU: [-25.0, 133.0]
 };
 
+const COUNTRY_NAMES = {
+  SA: "السعودية", EG: "مصر", QA: "قطر", AE: "الإمارات", KW: "الكويت",
+  BH: "البحرين", OM: "عُمان", JO: "الأردن", LB: "لبنان", IQ: "العراق",
+  US: "الولايات المتحدة", GB: "المملكة المتحدة", CA: "كندا", AU: "أستراليا",
+  DE: "ألمانيا", FR: "فرنسا", TR: "تركيا", CN: "الصين", JP: "اليابان",
+  RU: "روسيا", IN: "الهند", PK: "باكستان", BD: "بنغلاديش", IT: "إيطاليا",
+  ES: "إسبانيا", NL: "هولندا", BR: "البرازيل", MX: "المكسيك"
+};
+
+function countryNameFromCode(code) {
+  const normalized = String(code || "").toUpperCase();
+  return COUNTRY_NAMES[normalized] || normalized;
+}
+
 async function resolveCountryScope(query) {
   const words = String(query || "").trim().split(/\s+/).filter(Boolean);
   if (words.length < 2) return null;
@@ -1054,7 +1068,7 @@ export default {
               brand: String(tags.brand || ""),
               openingHours: String(tags.opening_hours || ""),
               region: String(tags["addr:state"] || tags["addr:province"] || tags["addr:region"] || tags["is_in:state"] || ""),
-              country: String(tags["addr:country"] || tags["is_in:country"] || countryCode)
+              country: String(tags["addr:country"] || tags["is_in:country"] || countryNameFromCode(countryCode))
             });
           }
           results.sort((a, b) =>
