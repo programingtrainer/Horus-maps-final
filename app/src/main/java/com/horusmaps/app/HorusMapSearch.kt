@@ -235,10 +235,12 @@ object HorusMapSearchApi {
         category: HorusSearchCategory,
         latitude: Double,
         longitude: Double,
-        countryCode: String
+        countryCode: String,
+        rawQuery: String = query
     ): List<HorusNearbyPlace> = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("query", query)
+            .put("rawQuery", rawQuery)
             .put("category", category.apiValue)
             .put("latitude", latitude)
             .put("longitude", longitude)
