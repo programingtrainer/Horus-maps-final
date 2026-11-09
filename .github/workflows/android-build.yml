@@ -75,10 +75,34 @@ jobs:
             throw new Error("Nearby POI smoke test failed: HTTP " + placesResponse.status + ", error=" + (places.error || "no results"));
           }
 
+          const pandaResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "supermarket", query: "Panda" }),
+            signal: AbortSignal.timeout(40000)
+          });
+          const panda = await pandaResponse.json();
+          if (!pandaResponse.ok || !panda.ok || !Array.isArray(panda.results) || panda.results.length === 0) {
+            throw new Error("Panda supermarket smoke test failed: HTTP " + pandaResponse.status + ", error=" + (panda.error || "no results"));
+          }
+
+          const pharmacyResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "pharmacy", query: "" }),
+            signal: AbortSignal.timeout(40000)
+          });
+          const pharmacies = await pharmacyResponse.json();
+          if (!pharmacyResponse.ok || !pharmacies.ok || !Array.isArray(pharmacies.results) || pharmacies.results.length === 0) {
+            throw new Error("Nearby pharmacy smoke test failed: HTTP " + pharmacyResponse.status + ", error=" + (pharmacies.error || "no results"));
+          }
+
           console.log("Preview search smoke tests passed:", JSON.stringify({
             reverseCountry: reverse.countryCode,
             geocodeResults: geocode.features.length,
-            nearbySupermarkets: places.results.length
+            nearbySupermarkets: places.results.length,
+            pandaMatches: panda.results.length,
+            nearbyPharmacies: pharmacies.results.length
           }));
           NODE
 
