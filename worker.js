@@ -685,27 +685,15 @@ async function queryNominatimPlaces(category, query, centerLat, centerLon, optio
 }
 
 async function collectProviderResults(label, providers) {
-  const attempts = providers.map(async provider => {
-    const result = await provider();
-    if (!Array.isArray(result) || result.length === 0) {
-      throw new Error("provider returned no matches");
+  for (const provider of providers) {
+    try {
+      const result = await provider();
+      if (Array.isArray(result) && result.length > 0) return result;
+    } catch (error) {
+      console.warn("[HorusSearch] " + label + " provider failed", String(error?.message || error).slice(0, 140));
     }
-    return result;
-  });
-  try {
-    // Return as soon as one independent provider supplies usable results.
-    // This prevents a slow or unavailable mirror from delaying live search.
-    return await Promise.any(attempts);
-  } catch (error) {
-    const failures = Array.isArray(error?.errors) ? error.errors : [error];
-    const details = failures
-      .map(item => String(item?.message || item))
-      .filter(message => message !== "provider returned no matches")
-      .slice(0, 3)
-      .join("; ");
-    if (details) console.warn("[HorusSearch] " + label + " providers unavailable", details.slice(0, 180));
-    return [];
   }
+  return [];
 }
 
 async function queryPhotonCountry(countryCode, category, query, centerLat, centerLon) {
@@ -1127,7 +1115,9 @@ export default {
 
           if (placeScope) {
             const regionalProviders = [
-              () => queryOverpassPlaceScope(placeScope, category),
+              () => queryNominatimPlaces(category, "", sortLatitude, sortLongitude, {
+                bounds: placeScope.bounds
+              }),
               async () => {
                 const countryResults = await queryPhotonCountry(
                   countryCode, category, "", sortLatitude, sortLongitude
@@ -1144,19 +1134,16 @@ export default {
                   haversineMeters(sortLatitude, sortLongitude, Number(item.lat), Number(item.lon)) <= 15000
                 );
               },
-              () => queryNominatimPlaces(category, "", sortLatitude, sortLongitude, {
-                bounds: placeScope.bounds
-              })
+              () => queryOverpassPlaceScope(placeScope, category)
             ];
             elements = await collectProviderResults("regional search", regionalProviders);
             elements = elements.map(item => ({ ...item, __horusScopeRank: 0 }));
           } else if (globalCountrySearch) {
-            const countryProviders = [];
+            const countryProviders = [
+              () => queryNominatimPlaces(category, query, sortLatitude, sortLongitude, { countryCode }),
+              () => queryPhotonCountry(countryCode, category, query, sortLatitude, sortLongitude)
+            ];
             if (query) countryProviders.push(() => queryOverpassCountry(countryCode, category, query));
-            countryProviders.push(
-              () => queryPhotonCountry(countryCode, category, query, sortLatitude, sortLongitude),
-              () => queryNominatimPlaces(category, query, sortLatitude, sortLongitude, { countryCode })
-            );
             elements = await collectProviderResults("country search", countryProviders);
             elements = elements.map(item => ({ ...item, __horusScopeRank: 1 }));
           } else {
@@ -1169,9 +1156,9 @@ export default {
               east: longitude + lonDelta
             };
             const nearbyProviders = [
-              () => queryOverpass(latitude, longitude, countryCode, category, query, 25000),
+              () => queryNominatimPlaces(category, query, latitude, longitude, { bounds: localBounds }),
               () => queryPhoton(latitude, longitude, category, query, 25000),
-              () => queryNominatimPlaces(category, query, latitude, longitude, { bounds: localBounds })
+              () => queryOverpass(latitude, longitude, countryCode, category, query, 25000)
             ];
             const nearbyElements = await collectProviderResults("nearby search", nearbyProviders);
             elements = nearbyElements.map(item => ({ ...item, __horusScopeRank: 0 }));
@@ -1179,20 +1166,19 @@ export default {
             // If nearby matches are sparse, expand to the rest of the user's
             // country before searching the wider world.
             if (elements.length < 5) {
-              const countryProviders = [];
+              const countryProviders = [
+                () => queryNominatimPlaces(category, query, latitude, longitude, { countryCode }),
+                () => queryPhotonCountry(countryCode, category, query, latitude, longitude)
+              ];
               if (query) countryProviders.push(() => queryOverpassCountry(countryCode, category, query));
-              countryProviders.push(
-                () => queryPhotonCountry(countryCode, category, query, latitude, longitude),
-                () => queryNominatimPlaces(category, query, latitude, longitude, { countryCode })
-              );
               const countryElements = await collectProviderResults("country expansion", countryProviders);
               elements.push(...countryElements.map(item => ({ ...item, __horusScopeRank: 1 })));
             }
 
             if (elements.length < 5) {
               const globalProviders = [
-                () => queryPhotonGlobal(category, query, latitude, longitude),
-                () => queryNominatimPlaces(category, query, latitude, longitude)
+                () => queryNominatimPlaces(category, query, latitude, longitude),
+                () => queryPhotonGlobal(category, query, latitude, longitude)
               ];
               const globalElements = await collectProviderResults("global expansion", globalProviders);
               elements.push(...globalElements.map(item => ({ ...item, __horusScopeRank: 2 })));
