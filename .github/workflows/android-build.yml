@@ -150,6 +150,28 @@ jobs:
             throw new Error("Cross-country Carrefour Egypt smoke test failed: HTTP " + egyptCarrefourResponse.status + ", country=" + egyptCarrefour.countryCode + ", scope=" + egyptCarrefour.searchScope + ", error=" + (egyptCarrefour.error || "no country-scoped results"));
           }
 
+          const arabicCarrefourResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "supermarket", query: "كارفور مصر", rawQuery: "كارفور مصر" }),
+            signal: AbortSignal.timeout(55000)
+          });
+          const arabicCarrefour = await arabicCarrefourResponse.json();
+          if (!arabicCarrefourResponse.ok || !arabicCarrefour.ok || arabicCarrefour.countryCode !== "eg" || arabicCarrefour.searchScope !== "country") {
+            throw new Error("Arabic cross-country Carrefour search failed: HTTP " + arabicCarrefourResponse.status + ", country=" + arabicCarrefour.countryCode + ", scope=" + arabicCarrefour.searchScope);
+          }
+
+          const egyptPharmacyResponse = await fetch(base + "/v1/search/places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ latitude: 24.7171757, longitude: 46.6858209, countryCode: "SA", category: "pharmacy", query: "مصر", rawQuery: "صيدلية في مصر" }),
+            signal: AbortSignal.timeout(55000)
+          });
+          const egyptPharmacies = await egyptPharmacyResponse.json();
+          if (!egyptPharmacyResponse.ok || !egyptPharmacies.ok || egyptPharmacies.countryCode !== "eg" || egyptPharmacies.searchScope !== "country" || !Array.isArray(egyptPharmacies.results) || egyptPharmacies.results.length === 0) {
+            throw new Error("Category-only cross-country pharmacy search failed: HTTP " + egyptPharmacyResponse.status + ", country=" + egyptPharmacies.countryCode + ", scope=" + egyptPharmacies.searchScope);
+          }
+
           const pharmacyResponse = await fetch(base + "/v1/search/places", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -172,6 +194,8 @@ jobs:
             nearbyFuelStations: fuel.results.length,
             nearbyHospitals: hospitals.results.length,
             egyptCarrefourBranches: egyptCarrefour.results.length,
+            arabicEgyptCarrefourBranches: arabicCarrefour.results.length,
+            egyptPharmacies: egyptPharmacies.results.length,
             egyptSearchScope: egyptCarrefour.searchScope,
             nearbyPharmacies: pharmacies.results.length
           }));
