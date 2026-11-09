@@ -132,7 +132,7 @@ function escapeOverpassRegex(value) {
   return String(value || "")
     .trim()
     .slice(0, 64)
-    .replace(/[.*+?^\${}()|[\]\\]/g, character => String.fromCharCode(92) + character);
+    .replace(/[.*+?^${}()|[\]\\]/g, character => String.fromCharCode(92) + character);
 }
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
