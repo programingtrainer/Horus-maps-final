@@ -103,7 +103,9 @@ data class HorusNearbyPlace(
     val distanceMeters: Int,
     val address: String,
     val brand: String,
-    val openingHours: String
+    val openingHours: String,
+    val region: String = "",
+    val country: String = ""
 )
 
 data class HorusCountryInfo(val code: String, val name: String)
@@ -261,7 +263,9 @@ object HorusMapSearchApi {
                         distanceMeters = item.optInt("distanceMeters", 0),
                         address = item.optString("address"),
                         brand = item.optString("brand"),
-                        openingHours = item.optString("openingHours")
+                        openingHours = item.optString("openingHours"),
+                        region = item.optString("region"),
+                        country = item.optString("country")
                     )
                 )
             }
