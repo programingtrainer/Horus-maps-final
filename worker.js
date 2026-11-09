@@ -170,7 +170,7 @@ function correctKnownSearchTerms(query) {
     const normalized = normalizeSearchText(token);
     for (const canonical of KNOWN_SEARCH_WORDS) {
       const distance = levenshteinDistance(normalized, canonical);
-      if (normalized === canonical || (normalized.length >= 5 && distance <= 1) || (normalized.length >= 8 && distance <= 2)) return canonical;
+      if (normalized === canonical || (normalized.length >= 4 && distance <= 1) || (canonical.length >= 8 && normalized.length >= canonical.length - 2 && distance <= 2)) return canonical;
     }
     return token;
   });
@@ -508,8 +508,7 @@ export default {
                     type: properties.type || properties.osm_value || "place"
                   }
                 };
-              });
-            }
+            });
           }
         }
 
