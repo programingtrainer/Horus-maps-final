@@ -234,7 +234,7 @@ async function queryOverpass(lat, lon, countryCode, category, query, radius) {
           "User-Agent": SEARCH_USER_AGENT
         },
         body: "data=" + encodeURIComponent(overpassQuery),
-        signal: AbortSignal.timeout(16000)
+        signal: AbortSignal.timeout(10000)
       });
       if (!response.ok) {
         lastError = new Error("Overpass HTTP " + response.status);
@@ -400,7 +400,9 @@ export default {
         }
         const cacheKey = "places:v1:" + countryCode + ":" + category + ":" + query.toLocaleLowerCase() + ":" +
           latitude.toFixed(3) + ":" + longitude.toFixed(3);
-        return cachedJson(env, cacheKey, 900, async () => {
+        // Await the cached operation so upstream failures are caught by this
+        // route's handler and returned as a controlled API error, not a Worker 500.
+        return await cachedJson(env, cacheKey, 900, async () => {
           let elements = [];
           let usedRadius = 50000;
           for (const radius of [50000, 150000]) {
