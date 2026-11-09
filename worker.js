@@ -301,8 +301,56 @@ export default {
           headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
           signal: AbortSignal.timeout(18000)
         });
-        if (!response.ok) return json({ ok: false, error: "تعذر البحث الجغرافي الآن." }, response.status);
-        const payload = await response.json();
+        let payload = null;
+        if (response.ok) {
+          payload = await response.json();
+        }
+
+        // Nominatim may throttle or return no matches for some names. Photon is
+        // a second independent OSM geocoder so ordinary places remain searchable.
+        if (!payload || !Array.isArray(payload.features) || payload.features.length === 0) {
+          const fallback = new URL("https://photon.komoot.io/api/");
+          fallback.searchParams.set("q", query);
+          fallback.searchParams.set("limit", "8");
+          fallback.searchParams.set("lang", language.split(",")[0] || "en");
+          if (latitude !== null && longitude !== null) {
+            fallback.searchParams.set("lat", String(latitude));
+            fallback.searchParams.set("lon", String(longitude));
+          }
+          const fallbackResponse = await fetch(fallback.toString(), {
+            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+            signal: AbortSignal.timeout(12000)
+          });
+          if (fallbackResponse.ok) {
+            payload = await fallbackResponse.json();
+            if (Array.isArray(payload.features)) {
+              payload.features = payload.features.map(feature => {
+                const properties = feature.properties || {};
+                const displayName = [
+                  properties.name,
+                  properties.street,
+                  properties.housenumber,
+                  properties.city || properties.town || properties.village,
+                  properties.state,
+                  properties.country
+                ].filter(Boolean).join(", ");
+                return {
+                  ...feature,
+                  properties: {
+                    ...properties,
+                    name: properties.name || properties.street || properties.city || properties.country || query,
+                    display_name: properties.display_name || displayName || query,
+                    type: properties.type || properties.osm_value || "place"
+                  }
+                };
+              });
+            }
+          }
+        }
+
+        if (!payload || !Array.isArray(payload.features)) {
+          return json({ ok: false, error: "تعذر الاتصال بخدمات البحث الجغرافي الآن." }, 503);
+        }
         return json({ ok: true, ...payload });
       });
     }
@@ -312,7 +360,7 @@ export default {
       const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
       if (latitude === null || longitude === null) return json({ ok: false, error: "إحداثيات الموقع غير صالحة." }, 400);
       const cacheKey = "reverse:v1:" + latitude.toFixed(3) + ":" + longitude.toFixed(3);
-      return cachedJson(cacheKey, 86400, async () => {
+      return cachedJson(env, cacheKey, 86400, async () => {
         const target = new URL("https://nominatim.openstreetmap.org/reverse");
         target.searchParams.set("lat", String(latitude));
         target.searchParams.set("lon", String(longitude));
