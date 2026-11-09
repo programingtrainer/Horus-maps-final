@@ -89,6 +89,62 @@ object HorusMapSearchApi {
     private const val BASE_URL = "https://horus-maps-final.horus-egypt-company.workers.dev/v1/search"
     private const val USER_AGENT = "HorusMaps-Android/0.1"
 
+    fun localContinent(context: android.content.Context, query: String): HorusGeoSearchResult? {
+        val value = normalizeSearchText(query)
+        val aliases = mapOf(
+            "Africa" to listOf("أفريقيا", "افريقيا", "Africa"),
+            "Asia" to listOf("آسيا", "اسيا", "Asia"),
+            "Europe" to listOf("أوروبا", "اوروبا", "Europe"),
+            "North America" to listOf("أمريكا الشمالية", "امريكا الشمالية", "North America"),
+            "South America" to listOf("أمريكا الجنوبية", "امريكا الجنوبية", "South America"),
+            "Oceania" to listOf("أوقيانوسيا", "اوقيانوسيا", "Oceania"),
+            "Antarctica" to listOf("القارة القطبية الجنوبية", "انتاركتيكا", "Antarctica")
+        )
+        val continent = aliases.entries.firstOrNull { (_, names) ->
+            names.any { normalizeSearchText(it) == value || value.contains(normalizeSearchText(it)) }
+        }?.key ?: return null
+        return runCatching {
+            val root = JSONObject(context.assets.open("continents.geojson").bufferedReader().use { it.readText() })
+            val features = root.optJSONArray("features") ?: return null
+            for (index in 0 until features.length()) {
+                val feature = features.optJSONObject(index) ?: continue
+                val properties = feature.optJSONObject("properties") ?: continue
+                if (!properties.optString("continent").equals(continent, true)) continue
+                val geometry = feature.optJSONObject("geometry") ?: continue
+                val points = mutableListOf<Pair<Double, Double>>()
+                collectCoordinates(geometry.optJSONArray("coordinates"), points)
+                if (points.isEmpty()) continue
+                val minLon = points.minOf { it.first }
+                val maxLon = points.maxOf { it.first }
+                val minLat = points.minOf { it.second }
+                val maxLat = points.maxOf { it.second }
+                val displayName = properties.optString("name_ar", properties.optString("name_en", continent))
+                return HorusGeoSearchResult(
+                    id = "continent/$continent",
+                    name = displayName,
+                    displayName = displayName,
+                    latitude = (minLat + maxLat) / 2.0,
+                    longitude = (minLon + maxLon) / 2.0,
+                    geometryGeoJson = JSONObject()
+                        .put("type", "Feature")
+                        .put("geometry", geometry)
+                        .put("properties", properties)
+                        .toString(),
+                    bounds = HorusGeoBounds(minLat, maxLat, minLon, maxLon),
+                    kind = "continent"
+                )
+            }
+            null
+        }.getOrNull()
+    }
+
+    private fun normalizeSearchText(value: String): String = value.lowercase(Locale.ROOT)
+        .replace('أ', 'ا').replace('إ', 'ا').replace('آ', 'ا')
+        .replace('ى', 'ي').replace("ـ", "")
+        .replace(Regex("[\\\\u064B-\\\\u065F]"), "")
+        .replace("قارة", "")
+        .trim()
+
     suspend fun geocode(query: String, latitude: Double?, longitude: Double?): List<HorusGeoSearchResult> =
         withContext(Dispatchers.IO) {
             val builder = Uri.parse("$BASE_URL/geocode").buildUpon()
