@@ -169,22 +169,6 @@ jobs:
           });
           const egyptPharmacies = await egyptPharmacyResponse.json();
 
-          const photonCategoryDebugResponse = await fetch("https://photon.komoot.io/api?countrycode=EG&include=osm.amenity.pharmacy&limit=5", {
-            headers: { "User-Agent": "HorusMaps/1.0" },
-            signal: AbortSignal.timeout(15000)
-          });
-          const photonCategoryDebugText = await photonCategoryDebugResponse.text();
-          console.log("Photon Egypt pharmacy category diagnostic:", photonCategoryDebugResponse.status, photonCategoryDebugText.slice(0, 1800));
-
-          const overpassCategoryDebugQuery = '[out:json][timeout:15];area["ISO3166-1"="EG"]["admin_level"="2"]->.searchArea;nwr(area.searchArea)["amenity"="pharmacy"];out center tags 5;';
-          const overpassCategoryDebugResponse = await fetch("https://overpass-api.de/api/interpreter", {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "User-Agent": "HorusMaps/1.0" },
-            body: "data=" + encodeURIComponent(overpassCategoryDebugQuery),
-            signal: AbortSignal.timeout(20000)
-          });
-          const overpassCategoryDebugText = await overpassCategoryDebugResponse.text();
-          console.log("Overpass Egypt pharmacy area diagnostic:", overpassCategoryDebugResponse.status, overpassCategoryDebugText.slice(0, 1800));
           if (!egyptPharmacyResponse.ok || !egyptPharmacies.ok || egyptPharmacies.countryCode !== "eg" || egyptPharmacies.searchScope !== "country" || !Array.isArray(egyptPharmacies.results) || egyptPharmacies.results.length === 0) {
             throw new Error("Category-only cross-country pharmacy search failed: HTTP " + egyptPharmacyResponse.status + ", country=" + egyptPharmacies.countryCode + ", scope=" + egyptPharmacies.searchScope);
           }
