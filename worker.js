@@ -169,42 +169,54 @@ async function cachedJson(cacheKey, ttlSeconds, producer) {
   return response;
 }
 
+function searchNamePattern(query) {
+  const value = String(query || "").trim();
+  if (!value) return "";
+  if (/بنده|panda/i.test(value)) return "بنده|Panda|Panda Hypermarket";
+  if (/كارفور|carrefour/i.test(value)) return "كارفور|Carrefour";
+  if (/لولو|lulu/i.test(value)) return "لولو|Lulu";
+  if (/دانوب|danube/i.test(value)) return "دانوب|Danube";
+  if (/العثيم|othaim/i.test(value)) return "العثيم|Othaim";
+  if (/النهدي|nahdi/i.test(value)) return "النهدي|Nahdi|Al Nahdi";
+  return escapeOverpassRegex(value);
+}
+
 function overpassSelectors(category, query) {
-  const escaped = escapeOverpassRegex(query);
+  const namePattern = searchNamePattern(query);
+  const nameFilter = namePattern
+    ? '[~"^(name|name:ar|name:en|brand|brand:ar|brand:en)$"~"' + namePattern + '",i]'
+    : "";
   if (category === "mosque") {
     return [
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="place_of_worship"]["religion"~"muslim|islam",i];',
-      'nwr(area.country)(around:RADIUS,LAT,LON)["building"="mosque"];'
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="place_of_worship"]["religion"~"muslim|islam",i]' + nameFilter + ';',
+      'nwr(area.country)(around:RADIUS,LAT,LON)["building"="mosque"]' + nameFilter + ';'
     ];
   }
   if (category === "supermarket") {
-    if (escaped) {
-      const pandaTerms = /بنده|panda/i.test(query) ? "بنده|Panda|Panda Hypermarket" : escaped;
-      const filter = '["shop"~"supermarket|convenience|department_store"][~"^(name|brand|name:en|brand:en)$"~"' + pandaTerms.replace(/"/g, "") + '",i]';
-      return ['nwr(area.country)(around:RADIUS,LAT,LON)' + filter + ';'];
-    }
-    return ['nwr(area.country)(around:RADIUS,LAT,LON)["shop"~"supermarket|convenience|department_store"];'];
+    return [
+      'nwr(area.country)(around:RADIUS,LAT,LON)["shop"~"supermarket|convenience|department_store"]' + nameFilter + ';'
+    ];
   }
   if (category === "pharmacy") {
     return [
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="pharmacy"];',
-      'nwr(area.country)(around:RADIUS,LAT,LON)["shop"="chemist"];'
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="pharmacy"]' + nameFilter + ';',
+      'nwr(area.country)(around:RADIUS,LAT,LON)["shop"="chemist"]' + nameFilter + ';'
     ];
   }
   if (category === "hospital") {
     return [
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="hospital"];',
-      'nwr(area.country)(around:RADIUS,LAT,LON)["healthcare"="hospital"];'
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="hospital"]' + nameFilter + ';',
+      'nwr(area.country)(around:RADIUS,LAT,LON)["healthcare"="hospital"]' + nameFilter + ';'
     ];
   }
   if (category === "restaurant") {
     return [
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="restaurant"];',
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="fast_food"];'
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="restaurant"]' + nameFilter + ';',
+      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="fast_food"]' + nameFilter + ';'
     ];
   }
   if (category === "fuel") {
-    return ['nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="fuel"];'];
+    return ['nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="fuel"]' + nameFilter + ';'];
   }
   return [];
 }
