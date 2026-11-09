@@ -128,6 +128,53 @@ function validCoordinate(value, min, max) {
   return Number.isFinite(number) && number >= min && number <= max ? number : null;
 }
 
+function normalizeSearchText(value) {
+  return String(value || "").toLocaleLowerCase().normalize("NFD")
+    .replace(/[\u064B-\u065F\u0670]/g, "").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[أإآٱ]/g, "ا").replace(/[ىي]/g, "ي").replace(/ة/g, "ه").replace(/ـ/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
+}
+
+const GEOGRAPHIC_ALIASES = new Map();
+for (const [canonical, aliases] of [
+  ["United States", ["امريكا", "الولايات المتحدة", "الولايات المتحده", "الولايات المتحده الامريكيه", "الولايات المتحدة الامريكية", "usa", "u s a", "us", "america", "united states", "united states of america"]],
+  ["United Kingdom", ["بريطانيا", "المملكة المتحدة", "المملكه المتحده", "انجلترا", "uk", "u k", "britain", "great britain", "united kingdom"]],
+  ["Saudi Arabia", ["السعودية", "السعوديه", "المملكة العربية السعودية", "المملكه العربيه السعوديه", "saudi", "ksa", "saudi arabia"]],
+  ["United Arab Emirates", ["الامارات", "الإمارات", "الامارات العربية المتحدة", "الامارات العربيه المتحده", "uae", "united arab emirates"]],
+  ["Egypt", ["مصر", "egypt"]], ["Türkiye", ["تركيا", "turkey", "turkiye", "türkiye"]],
+  ["Russia", ["روسيا", "russia"]], ["China", ["الصين", "china"]], ["Japan", ["اليابان", "japan"]],
+  ["Germany", ["المانيا", "ألمانيا", "germany"]], ["France", ["فرنسا", "france"]],
+  ["Canada", ["كندا", "canada"]], ["Australia", ["استراليا", "أستراليا", "australia"]]
+]) for (const alias of aliases) GEOGRAPHIC_ALIASES.set(normalizeSearchText(alias), canonical);
+
+function geographicQueryVariants(query) {
+  const canonical = GEOGRAPHIC_ALIASES.get(normalizeSearchText(query));
+  return [...new Set((canonical ? [canonical, query] : [query]).map(value => String(value || "").trim()).filter(Boolean))];
+}
+
+function levenshteinDistance(left, right) {
+  const a = Array.from(left), b = Array.from(right);
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) current[j] = Math.min(current[j - 1] + 1, previous[j] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    previous = current;
+  }
+  return previous[b.length];
+}
+
+const KNOWN_SEARCH_WORDS = ["carrefour", "panda", "danube", "othaim", "nahdi", "lulu"];
+function correctKnownSearchTerms(query) {
+  return String(query || "").replace(/[\p{L}\p{N}]+/gu, token => {
+    const normalized = normalizeSearchText(token);
+    for (const canonical of KNOWN_SEARCH_WORDS) {
+      const distance = levenshteinDistance(normalized, canonical);
+      if (normalized === canonical || (normalized.length >= 5 && distance <= 1) || (normalized.length >= 8 && distance <= 2)) return canonical;
+    }
+    return token;
+  });
+}
 function escapeOverpassRegex(value) {
   return String(value || "")
     .trim()
@@ -166,8 +213,8 @@ async function cachedJson(env, cacheKey, ttlSeconds, producer) {
   return response;
 }
 
-function searchNamePattern(query) {
-  const value = String(query || "").trim();
+function searchNamePattern(query, category) {
+  const value = correctKnownSearchTerms(String(query || "").trim());
   if (!value) return "";
   if (/بنده|panda/i.test(value)) return "بنده|Panda|Panda Hypermarket";
   if (/كارفور|carrefour/i.test(value)) return "كارفور|Carrefour";
@@ -175,11 +222,12 @@ function searchNamePattern(query) {
   if (/دانوب|danube/i.test(value)) return "دانوب|Danube";
   if (/العثيم|othaim/i.test(value)) return "العثيم|Othaim";
   if (/النهدي|nahdi/i.test(value)) return "النهدي|Nahdi|Al Nahdi";
-  return escapeOverpassRegex(value);
+  const variants = category === "mosque" ? [value, "مسجد " + value, "جامع " + value] : [value];
+  return variants.map(escapeOverpassRegex).filter(Boolean).join("|");
 }
 
 function overpassSelectors(category, query) {
-  const namePattern = searchNamePattern(query);
+  const namePattern = searchNamePattern(query, category);
   const nameFilter = namePattern
     ? '[~"^(name|name:ar|name:en|brand|brand:ar|brand:en)$"~"' + namePattern + '",i]'
     : "";
@@ -279,7 +327,7 @@ async function queryPhoton(lat, lon, category, query, radius) {
   const tags = PHOTON_TAGS[category] || [];
   if (!tags.length) throw new Error("Photon does not support this place category");
 
-  const searchText = photonSearchText(query);
+  const searchText = photonSearchText(correctKnownSearchTerms(query));
   const attempts = tags.map(async tag => {
     const target = new URL(searchText ? "https://photon.komoot.io/api/" : "https://photon.komoot.io/reverse");
     target.searchParams.set("lat", String(lat));
@@ -383,16 +431,18 @@ export default {
 
 
     if (url.pathname === "/v1/search/geocode" && request.method === "GET") {
-      const query = String(url.searchParams.get("q") || "").trim().slice(0, 120);
-      if (query.length < 2) return json({ ok: false, error: "اكتب حرفين على الأقل للبحث." }, 400);
+      const rawQuery = String(url.searchParams.get("q") || "").trim().slice(0, 120);
+      if (rawQuery.length < 2) return json({ ok: false, error: "اكتب حرفين على الأقل للبحث." }, 400);
+      const query = correctKnownSearchTerms(rawQuery);
+      const queryVariants = geographicQueryVariants(query);
       const latitude = validCoordinate(url.searchParams.get("lat"), -90, 90);
       const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
       const language = String(url.searchParams.get("lang") || "ar,en").slice(0, 32);
-      const cacheKey = "geocode:v1:" + query.toLocaleLowerCase() + ":" + language + ":" +
+      const cacheKey = "geocode:v2:" + queryVariants.join("|").toLocaleLowerCase() + ":" + language + ":" +
         (latitude === null ? "" : latitude.toFixed(2)) + ":" + (longitude === null ? "" : longitude.toFixed(2));
       return cachedJson(env, cacheKey, 86400, async () => {
         const target = new URL("https://nominatim.openstreetmap.org/search");
-        target.searchParams.set("q", query);
+        target.searchParams.set("q", queryVariants[0]);
         target.searchParams.set("format", "geojson");
         target.searchParams.set("polygon_geojson", "1");
         target.searchParams.set("polygon_threshold", "0.003");
@@ -420,21 +470,25 @@ export default {
         // Nominatim may throttle or return no matches for some names. Photon is
         // a second independent OSM geocoder so ordinary places remain searchable.
         if (!payload || !Array.isArray(payload.features) || payload.features.length === 0) {
-          const fallback = new URL("https://photon.komoot.io/api/");
-          fallback.searchParams.set("q", query);
-          fallback.searchParams.set("limit", "8");
-          fallback.searchParams.set("lang", language.split(",")[0] || "en");
-          if (latitude !== null && longitude !== null) {
-            fallback.searchParams.set("lat", String(latitude));
-            fallback.searchParams.set("lon", String(longitude));
+          for (const variant of queryVariants) {
+            const fallback = new URL("https://photon.komoot.io/api/");
+            fallback.searchParams.set("q", variant);
+            fallback.searchParams.set("limit", "8");
+            fallback.searchParams.set("lang", language.split(",")[0] || "en");
+            if (latitude !== null && longitude !== null) {
+              fallback.searchParams.set("lat", String(latitude));
+              fallback.searchParams.set("lon", String(longitude));
+            }
+            const fallbackResponse = await fetch(fallback.toString(), {
+              headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+              signal: AbortSignal.timeout(12000)
+            });
+            if (fallbackResponse.ok) {
+              payload = await fallbackResponse.json();
+              if (Array.isArray(payload.features) && payload.features.length > 0) break;
+            }
           }
-          const fallbackResponse = await fetch(fallback.toString(), {
-            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
-            signal: AbortSignal.timeout(12000)
-          });
-          if (fallbackResponse.ok) {
-            payload = await fallbackResponse.json();
-            if (Array.isArray(payload.features)) {
+          if (payload && Array.isArray(payload.features)) {
               payload.features = payload.features.map(feature => {
                 const properties = feature.properties || {};
                 const displayName = [
