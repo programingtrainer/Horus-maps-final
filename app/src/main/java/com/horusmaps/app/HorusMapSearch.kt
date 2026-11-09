@@ -49,7 +49,9 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
             .replace(Regex("[أإآٱ]"), "ا")
             .replace("ى", "ي").replace("ة", "ه")
             .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
-            .trim().replace(Regex("\\s+"), " ")}
+            .trim().replace(Regex("\\s+"), " ")
+    }
+}
 
 data class HorusGeoBounds(
     val south: Double,
