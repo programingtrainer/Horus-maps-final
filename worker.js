@@ -272,6 +272,28 @@ function overpassSelectors(category, query) {
   return [];
 }
 
+const COUNTRY_ISO_CODES = {
+  "United States": "US",
+  "United Kingdom": "GB",
+  "Saudi Arabia": "SA",
+  "United Arab Emirates": "AE",
+  "Egypt": "EG",
+  "Türkiye": "TR",
+  "Russia": "RU",
+  "China": "CN",
+  "Japan": "JP",
+  "Germany": "DE",
+  "France": "FR",
+  "Canada": "CA",
+  "Australia": "AU"
+};
+const COUNTRY_CENTERS = {
+  US: [39.8, -98.5], GB: [54.0, -2.0], SA: [24.0, 45.0], AE: [24.0, 54.0],
+  EG: [26.8, 30.8], TR: [39.0, 35.0], RU: [60.0, 100.0], CN: [35.0, 103.0],
+  JP: [36.0, 138.0], DE: [51.0, 10.0], FR: [46.0, 2.0], CA: [56.0, -106.0],
+  AU: [-25.0, 133.0]
+};
+
 async function resolveCountryScope(query) {
   const words = String(query || "").trim().split(/\s+/).filter(Boolean);
   if (words.length < 2) return null;
@@ -281,6 +303,27 @@ async function resolveCountryScope(query) {
     while (suffixWords.length && connectors.has(normalizeSearchText(suffixWords[0]))) suffixWords = suffixWords.slice(1);
     if (!suffixWords.length) continue;
     const suffix = suffixWords.join(" ");
+    const normalizedSuffix = normalizeSearchText(suffix);
+    let canonicalCountry = GEOGRAPHIC_ALIASES.get(normalizedSuffix);
+    if (!canonicalCountry && normalizedSuffix.length >= 5) {
+      for (const [alias, canonical] of GEOGRAPHIC_ALIASES) {
+        if (alias.length >= 5 && levenshteinDistance(normalizedSuffix, alias) <= 1) {
+          canonicalCountry = canonical;
+          break;
+        }
+      }
+    }
+    const knownCode = canonicalCountry ? COUNTRY_ISO_CODES[canonicalCountry] : null;
+    if (knownCode) {
+      const center = COUNTRY_CENTERS[knownCode] || [NaN, NaN];
+      return {
+        countryCode: knownCode,
+        query: words.slice(0, words.length - count).join(" ").replace(/\\b(in)\\s*$/i, "").trim(),
+        matchedWords: suffixWords.length,
+        latitude: center[0],
+        longitude: center[1]
+      };
+    }
     const target = new URL("https://photon.komoot.io/api/");
     target.searchParams.set("q", suffix);
     target.searchParams.set("limit", "8");
