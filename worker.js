@@ -761,15 +761,24 @@ export default {
           let elements = [];
           let usedRadius = globalCountrySearch ? 0 : 25000;
           if (globalCountrySearch) {
-            try {
-              elements = await queryOverpassCountry(countryCode, category, query);
-            } catch (overpassError) {
-              console.warn("[HorusSearch] Country Overpass unavailable; trying Photon", String(overpassError?.message || overpassError).slice(0, 160));
-            }
-            if (elements.length === 0) {
+            if (!query) {
+              // Category-only country searches are best served by Photon's
+              // country + OSM-category filters; this avoids a costly
+              // whole-country Overpass scan.
               elements = await queryPhotonCountry(
                 countryCode, category, query, sortLatitude, sortLongitude
               );
+            } else {
+              try {
+                elements = await queryOverpassCountry(countryCode, category, query);
+              } catch (overpassError) {
+                console.warn("[HorusSearch] Country Overpass unavailable; trying Photon", String(overpassError?.message || overpassError).slice(0, 160));
+              }
+              if (elements.length === 0) {
+                elements = await queryPhotonCountry(
+                  countryCode, category, query, sortLatitude, sortLongitude
+                );
+              }
             }
           } else {
             try {
