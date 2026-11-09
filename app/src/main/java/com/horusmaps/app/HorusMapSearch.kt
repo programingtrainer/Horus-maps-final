@@ -21,12 +21,12 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
         fun detect(raw: String): HorusSearchCategory? {
             val value = normalize(raw)
             return when {
-                listOf("مسجد", "مساجد", "جامع", "جوامع", "مصلى", "mosque", "mosques", "masjid", "prayer hall").any { value.contains(it) } -> MOSQUE
-                listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "بقالة", "supermarket", "super market", "grocery", "market", "بنده", "panda", "كارفور", "carrefour", "لولو", "lulu", "دانوب", "danube", "العثيم", "othaim").any { value.contains(it) } -> SUPERMARKET
-                listOf("مستشفى", "مستشفي", "مستشفيات", "مستشفيّات", "hospital", "hospitals", "clinic").any { value.contains(it) } -> HOSPITAL
-                listOf("صيدلية", "صيدليه", "صيدليات", "صيدليات", "pharmacy", "pharmacies", "chemist", "drugstore").any { value.contains(it) } -> PHARMACY
-                listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه", "مقهى").any { value.contains(it) } -> RESTAURANT
-                listOf("محطة وقود", "محطة بنزين", "بنزين", "وقود", "fuel", "gas station", "petrol", "gasoline").any { value.contains(it) } -> FUEL
+                listOf("مسجد", "مساجد", "جامع", "جوامع", "مصلى", "mosque", "mosques", "masjid", "prayer hall").any { matchesTerm(value, it) } -> MOSQUE
+                listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "بقالة", "supermarket", "super market", "grocery", "market", "بنده", "panda", "كارفور", "carrefour", "لولو", "lulu", "دانوب", "danube", "العثيم", "othaim").any { matchesTerm(value, it) } -> SUPERMARKET
+                listOf("مستشفى", "مستشفي", "مستشفيات", "مستشفيّات", "hospital", "hospitals", "clinic").any { matchesTerm(value, it) } -> HOSPITAL
+                listOf("صيدلية", "صيدليه", "صيدليات", "صيدليات", "pharmacy", "pharmacies", "chemist", "drugstore").any { matchesTerm(value, it) } -> PHARMACY
+                listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه", "مقهى").any { matchesTerm(value, it) } -> RESTAURANT
+                listOf("محطة وقود", "محطة بنزين", "بنزين", "وقود", "fuel", "gas station", "petrol", "gasoline").any { matchesTerm(value, it) } -> FUEL
                 else -> null
             }
         }
@@ -40,7 +40,25 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
                 RESTAURANT -> setOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه", "مقهى")
                 FUEL -> setOf("محطة", "وقود", "بنزين", "fuel", "gas", "station", "petrol", "gasoline")
             }.map(::normalize).toSet()
-            return normalize(raw).split(" ").filter { it.isNotBlank() && it !in genericTokens }.joinToString(" ")
+            return normalize(raw).split(" ").filter { token -> token.isNotBlank() && genericTokens.none { generic -> token == generic || (token.length >= 4 && levenshtein(token, generic) <= 1) } }.joinToString(" ")
+        }
+
+        private fun matchesTerm(value: String, term: String): Boolean {
+            if (value.contains(term)) return true
+            if (term.contains(" ")) return false
+            return value.split(" ").any { token -> token.length >= 4 && levenshtein(token, term) <= 1 }
+        }
+
+        private fun levenshtein(left: String, right: String): Int {
+            if (kotlin.math.abs(left.length - right.length) > 1) return 2
+            var previous = IntArray(right.length + 1) { it }
+            for (i in left.indices) {
+                val current = IntArray(right.length + 1)
+                current[0] = i + 1
+                for (j in right.indices) current[j + 1] = minOf(current[j] + 1, previous[j + 1] + 1, previous[j] + if (left[i] == right[j]) 0 else 1)
+                previous = current
+            }
+            return previous[right.length]
         }
 
         private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
