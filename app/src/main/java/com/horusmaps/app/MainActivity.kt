@@ -408,7 +408,7 @@ class MainActivity : ComponentActivity() {
                     .include(LatLng(bounds.north, bounds.west))
                     .include(LatLng(bounds.south, bounds.east))
                     .build()
-                map.animateCamera(CameraUpdateFactory.newLatLngBounds(fitBounds, 112), 1050)
+                map.animateCamera(CameraUpdateFactory.newLatLngBounds(fitBounds, (112 * resources.displayMetrics.density).toInt()), 1050)
             }.onFailure {
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 7.0), 900)
             }
