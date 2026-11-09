@@ -466,14 +466,39 @@ class MainActivity : ComponentActivity() {
     private fun focusSearchResult(map: org.maplibre.android.maps.MapLibreMap, result: HorusGeoSearchResult) {
         val bounds = result.bounds
         if (bounds != null) {
-            runCatching {
-                val fitBounds = LatLngBounds.Builder()
-                    .include(LatLng(bounds.north, bounds.west))
-                    .include(LatLng(bounds.south, bounds.east))
-                    .build()
-                map.animateCamera(CameraUpdateFactory.newLatLngBounds(fitBounds, (112 * resources.displayMetrics.density).toInt()), 1050)
-            }.onFailure {
-                map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 7.0), 900)
+            val crossesAntimeridian = bounds.west > bounds.east
+            if (crossesAntimeridian) {
+                // LatLngBounds.Builder treats west/east as an ordinary numeric
+                // range. For a polygon crossing +/-180°, that can produce a
+                // nearly-worldwide box whose apparent center is around Africa.
+                // The search API now supplies the center of the shortest
+                // longitude arc, so use it directly for this camera transition.
+                val longitudeSpan = (180.0 - bounds.west) + (bounds.east + 180.0)
+                val latitudeSpan = bounds.north - bounds.south
+                val extent = maxOf(longitudeSpan, latitudeSpan)
+                val zoom = when {
+                    extent > 150.0 -> 2.2
+                    extent > 110.0 -> 2.7
+                    extent > 75.0 -> 3.3
+                    extent > 45.0 -> 4.0
+                    extent > 25.0 -> 4.8
+                    extent > 12.0 -> 5.8
+                    else -> 6.8
+                }
+                map.animateCamera(
+                    CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), zoom),
+                    1050
+                )
+            } else {
+                runCatching {
+                    val fitBounds = LatLngBounds.Builder()
+                        .include(LatLng(bounds.north, bounds.west))
+                        .include(LatLng(bounds.south, bounds.east))
+                        .build()
+                    map.animateCamera(CameraUpdateFactory.newLatLngBounds(fitBounds, (112 * resources.displayMetrics.density).toInt()), 1050)
+                }.onFailure {
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 7.0), 900)
+                }
             }
         } else {
             val kind = result.kind.lowercase()
