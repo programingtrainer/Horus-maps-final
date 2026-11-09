@@ -148,7 +148,13 @@ for (const [canonical, aliases] of [
 ]) for (const alias of aliases) GEOGRAPHIC_ALIASES.set(normalizeSearchText(alias), canonical);
 
 function geographicQueryVariants(query) {
-  const canonical = GEOGRAPHIC_ALIASES.get(normalizeSearchText(query));
+  const normalized = normalizeSearchText(query);
+  let canonical = GEOGRAPHIC_ALIASES.get(normalized);
+  if (!canonical && normalized.length >= 5) {
+    for (const [alias, country] of GEOGRAPHIC_ALIASES) {
+      if (alias.length >= 5 && levenshteinDistance(normalized, alias) <= 1) { canonical = country; break; }
+    }
+  }
   return [...new Set((canonical ? [canonical, query] : [query]).map(value => String(value || "").trim()).filter(Boolean))];
 }
 
