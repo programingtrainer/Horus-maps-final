@@ -118,9 +118,9 @@ async function getAuthenticatedUser(request, env) {
 
 const SEARCH_USER_AGENT = "HorusMaps/0.1 (Android map search; https://github.com/programingtrainer/Horus-maps-final)";
 const SEARCH_OVERPASS_ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-  "https://overpass.nchc.org.tw/api/interpreter"
+  "https://overpass.private.coffee/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  "https://overpass-api.de/api/interpreter"
 ];
 
 function validCoordinate(value, min, max) {
