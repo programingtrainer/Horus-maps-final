@@ -1,6 +1,7 @@
 package com.horusmaps.app
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
@@ -80,6 +81,12 @@ import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.annotations.Marker
+import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.maps.Style
 import org.maplibre.android.location.LocationComponentActivationOptions
@@ -335,6 +342,82 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
 }
 
 class MainActivity : ComponentActivity() {
+    private val searchBoundaryHandler = Handler(Looper.getMainLooper())
+    private var searchBoundaryAnimator: ValueAnimator? = null
+    private var searchBoundaryClearRunnable: Runnable? = null
+    private var searchMarker: Marker? = null
+
+    private fun bestKnownLocation(map: org.maplibre.android.maps.MapLibreMap): Location? {
+        val componentLocation = runCatching {
+            if (map.locationComponent.isLocationComponentActivated) map.locationComponent.lastKnownLocation else null
+        }.getOrNull()
+        if (componentLocation != null) return componentLocation
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) return null
+        val manager = getSystemService(LOCATION_SERVICE) as LocationManager
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+        return providers.mapNotNull { runCatching { manager.getLastKnownLocation(it) }.getOrNull() }
+            .filter { System.currentTimeMillis() - it.time < 2 * 60 * 60 * 1000L }
+            .maxByOrNull { it.time }
+    }
+
+    private fun showSearchMarker(map: org.maplibre.android.maps.MapLibreMap, latitude: Double, longitude: Double, title: String) {
+        runCatching { searchMarker?.let { map.removeAnnotation(it) } }
+        searchMarker = runCatching {
+            map.addMarker(MarkerOptions().position(LatLng(latitude, longitude)).title(title))
+        }.getOrNull()
+    }
+
+    private fun showSearchBoundary(map: org.maplibre.android.maps.MapLibreMap, featureGeoJson: String) {
+        searchBoundaryAnimator?.cancel()
+        searchBoundaryClearRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        map.getStyle { style ->
+            val source = (style.getSource("horus-search-boundary") as? GeoJsonSource)
+                ?: GeoJsonSource("horus-search-boundary", featureGeoJson).also(style::addSource)
+            source.setGeoJson(featureGeoJson)
+            val layer = (style.getLayer("horus-search-boundary-line") as? LineLayer)
+                ?: LineLayer("horus-search-boundary-line", "horus-search-boundary").apply {
+                    setProperties(PropertyFactory.lineColor("#F02035"), PropertyFactory.lineWidth(3.2f), PropertyFactory.lineOpacity(1.0f))
+                }.also(style::addLayer)
+            layer.setProperties(PropertyFactory.lineColor("#F02035"), PropertyFactory.lineWidth(3.2f), PropertyFactory.lineOpacity(1.0f))
+            val clear = Runnable {
+                searchBoundaryAnimator = ValueAnimator.ofFloat(1.0f, 0.0f).apply {
+                    duration = 1500L
+                    addUpdateListener { animation ->
+                        runCatching { layer.setProperties(PropertyFactory.lineOpacity(animation.animatedValue as Float)) }
+                    }
+                    start()
+                }
+                searchBoundaryHandler.postDelayed({
+                    runCatching { source.setGeoJson("""{"type":"FeatureCollection","features":[]}""") }
+                }, 1550L)
+            }
+            searchBoundaryClearRunnable = clear
+            searchBoundaryHandler.postDelayed(clear, 8500L)
+        }
+    }
+
+    private fun focusSearchResult(map: org.maplibre.android.maps.MapLibreMap, result: HorusGeoSearchResult) {
+        val bounds = result.bounds
+        if (bounds != null) {
+            runCatching {
+                val fitBounds = LatLngBounds.Builder()
+                    .include(LatLng(bounds.north, bounds.west))
+                    .include(LatLng(bounds.south, bounds.east))
+                    .build()
+                map.animateCamera(CameraUpdateFactory.newLatLngBounds(fitBounds, 112), 1050)
+            }.onFailure {
+                map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 7.0), 900)
+            }
+        } else {
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 12.0), 900)
+        }
+        showSearchMarker(map, result.latitude, result.longitude, result.name)
+        showSearchBoundary(map, result.geometryGeoJson)
+    }
+
     private fun enableBlueLocationDot(map: org.maplibre.android.maps.MapLibreMap, style: Style) {
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -430,6 +513,13 @@ class MainActivity : ComponentActivity() {
                 var showLogin by remember { mutableStateOf(false) }
                 var showProfile by remember { mutableStateOf(false) }
                 var profileImageUri by remember { mutableStateOf(accountPrefs.getString("profile_image_uri", null)) }
+                var searchQuery by remember { mutableStateOf("") }
+                var searchExpanded by remember { mutableStateOf(false) }
+                var searchLoading by remember { mutableStateOf(false) }
+                var searchError by remember { mutableStateOf<String?>(null) }
+                var selectedSearchCategory by remember { mutableStateOf<HorusSearchCategory?>(null) }
+                var geographySearchResults by remember { mutableStateOf<List<HorusGeoSearchResult>>(emptyList()) }
+                var nearbySearchResults by remember { mutableStateOf<List<HorusNearbyPlace>>(emptyList()) }
 
                 fun activateAccount(
                     email: String,
@@ -746,6 +836,79 @@ class MainActivity : ComponentActivity() {
                     if (fine || coarse) mapLibreMap?.let { centerOnCurrentLocation(it) }
                     else locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                 }
+
+                fun runMapSearch() {
+                    val rawQuery = searchQuery.trim()
+                    val category = selectedSearchCategory ?: HorusSearchCategory.detect(rawQuery)
+                    if (rawQuery.length < 2 && category == null) {
+                        searchError = "اكتب اسم دولة أو قارة أو مكان للبحث."
+                        searchExpanded = true
+                        return
+                    }
+                    val map = mapLibreMap
+                    if (map == null) {
+                        searchError = "الخريطة ما زالت تُحمّل. حاول بعد لحظات."
+                        return
+                    }
+                    selectedSearchCategory = category
+                    searchLoading = true
+                    searchError = null
+                    geographySearchResults = emptyList()
+                    nearbySearchResults = emptyList()
+                    searchExpanded = true
+                    accountScope.launch {
+                        try {
+                            if (category != null) {
+                                val location = bestKnownLocation(map)
+                                if (location == null) {
+                                    val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                    val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                    if (!fine && !coarse) {
+                                        searchError = "للعثور على أقرب فرع داخل دولتك، اسمح لـ HorusMaps باستخدام موقعك."
+                                        locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                                    } else {
+                                        searchError = "لم نتمكن من تحديد موقعك الحالي. تأكد من تشغيل GPS ثم اضغط تحديد موقعي."
+                                    }
+                                    return@launch
+                                }
+                                val country = HorusMapSearchApi.reverseCountry(location.latitude, location.longitude)
+                                val branchQuery = HorusSearchCategory.queryFor(rawQuery, category)
+                                val results = HorusMapSearchApi.nearbyPlaces(branchQuery, category, location.latitude, location.longitude, country.code)
+                                nearbySearchResults = results
+                                if (results.isEmpty()) {
+                                    searchError = "لم نعثر على نتائج مطابقة داخل " + country.name.ifBlank { "دولتك" } + " ضمن نطاق البحث."
+                                }
+                            } else {
+                                val target = map.cameraPosition.target
+                                val localContinent = HorusMapSearchApi.localContinent(this@MainActivity, rawQuery)
+                                val results = if (localContinent != null) listOf(localContinent)
+                                    else HorusMapSearchApi.geocode(rawQuery, target?.latitude, target?.longitude)
+                                geographySearchResults = results
+                                if (results.isEmpty()) searchError = "لم نعثر على مكان مطابق. جرّب كتابة الاسم بطريقة أخرى."
+                            }
+                        } catch (error: Exception) {
+                            searchError = error.message?.takeIf { it.isNotBlank() }
+                                ?: "حدث خطأ أثناء البحث. تحقق من اتصال الإنترنت وحاول مرة أخرى."
+                        } finally {
+                            searchLoading = false
+                        }
+                    }
+                }
+
+                fun selectGeographyResult(result: HorusGeoSearchResult) {
+                    mapLibreMap?.let { focusSearchResult(it, result) }
+                    searchExpanded = false
+                    searchError = null
+                }
+
+                fun selectNearbyResult(result: HorusNearbyPlace) {
+                    mapLibreMap?.let { map ->
+                        map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 16.5), 900)
+                        showSearchMarker(map, result.latitude, result.longitude, result.name)
+                    }
+                    searchExpanded = false
+                    searchError = null
+                }
                 LaunchedEffect(Unit) {
                     HorusRemoteConfig.refresh(this@MainActivity) { updated ->
                         remoteConfig = updated
@@ -857,6 +1020,43 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
+                        )
+
+                        HorusMapSearchPanel(
+                            query = searchQuery,
+                            onQueryChange = { value ->
+                                searchQuery = value
+                                searchError = null
+                                if (selectedSearchCategory != null && HorusSearchCategory.detect(value) == null) selectedSearchCategory = null
+                            },
+                            expanded = searchExpanded,
+                            onExpandedChange = { searchExpanded = it },
+                            loading = searchLoading,
+                            error = searchError,
+                            selectedCategory = selectedSearchCategory,
+                            geographyResults = geographySearchResults,
+                            nearbyResults = nearbySearchResults,
+                            onCategorySelected = { category ->
+                                selectedSearchCategory = category
+                                searchQuery = ""
+                                searchError = null
+                                geographySearchResults = emptyList()
+                                nearbySearchResults = emptyList()
+                                searchExpanded = true
+                            },
+                            onSearch = { runMapSearch() },
+                            onSelectGeography = { selectGeographyResult(it) },
+                            onSelectPlace = { selectNearbyResult(it) },
+                            onClose = {
+                                searchExpanded = false
+                                searchQuery = ""
+                                searchError = null
+                                selectedSearchCategory = null
+                                geographySearchResults = emptyList()
+                                nearbySearchResults = emptyList()
+                            },
+                            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                                .padding(start = 12.dp, end = 78.dp, top = 8.dp)
                         )
 
                         // MapLibre-style plain wordmark in the lower-right corner (no badge or info icon).
