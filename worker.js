@@ -1068,7 +1068,8 @@ export default {
               brand: String(tags.brand || ""),
               openingHours: String(tags.opening_hours || ""),
               region: String(tags["addr:state"] || tags["addr:province"] || tags["addr:region"] || tags["is_in:state"] || ""),
-              country: String(tags["addr:country"] || tags["is_in:country"] || countryNameFromCode(tags["addr:country_code"] || countryCode))
+              country: String(tags["addr:country"] || tags["is_in:country"] || countryNameFromCode(tags["addr:country_code"] || countryCode)),
+              countryCode: String(tags["addr:country_code"] || countryCode).toLowerCase()
             });
           }
           results.sort((a, b) =>
