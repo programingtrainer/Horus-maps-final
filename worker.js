@@ -363,6 +363,177 @@ async function resolveCountryScope(query) {
   return null;
 }
 
+async function resolvePlaceScope(query, nearLat, nearLon) {
+  const value = String(query || "").trim().slice(0, 100);
+  if (value.length < 2) return null;
+
+  const target = new URL("https://nominatim.openstreetmap.org/search");
+  target.searchParams.set("q", value);
+  target.searchParams.set("format", "jsonv2");
+  target.searchParams.set("addressdetails", "1");
+  target.searchParams.set("limit", "8");
+  target.searchParams.set("accept-language", "ar,en");
+  if (Number.isFinite(nearLat) && Number.isFinite(nearLon)) {
+    const delta = 4;
+    target.searchParams.set("viewbox", [
+      nearLon - delta, nearLat + delta, nearLon + delta, nearLat - delta
+    ].join(","));
+  }
+
+  try {
+    const response = await fetch(target.toString(), {
+      headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const allowedTypes = new Set([
+      "city", "town", "village", "hamlet", "suburb", "neighbourhood", "quarter",
+      "district", "county", "state", "province", "municipality", "administrative",
+      "locality", "isolated_dwelling", "borough"
+    ]);
+    const candidate = (Array.isArray(payload) ? payload : []).find(item => {
+      const category = String(item.class || item.category || "").toLowerCase();
+      const type = String(item.type || "").toLowerCase();
+      return (category === "place" || category === "boundary") && allowedTypes.has(type) &&
+        /^[a-z]{2}$/i.test(String(item.address?.country_code || ""));
+    });
+    if (!candidate) return null;
+
+    const bbox = Array.isArray(candidate.boundingbox) ? candidate.boundingbox.map(Number) : [];
+    const bounds = bbox.length === 4 && bbox.every(Number.isFinite)
+      ? { south: bbox[0], north: bbox[1], west: bbox[2], east: bbox[3] }
+      : null;
+    const latitude = Number(candidate.lat);
+    const longitude = Number(candidate.lon);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+    return {
+      countryCode: String(candidate.address.country_code).toUpperCase(),
+      latitude,
+      longitude,
+      bounds,
+      osmType: String(candidate.osm_type || "").toLowerCase(),
+      osmId: String(candidate.osm_id || ""),
+      category: String(candidate.class || "").toLowerCase(),
+      type: String(candidate.type || "").toLowerCase(),
+      name: String(candidate.name || candidate.display_name || value)
+    };
+  } catch (error) {
+    console.warn("[HorusSearch] Place scope resolution failed", String(error?.message || error).slice(0, 140));
+    return null;
+  }
+}
+
+async function queryOverpassPlaceScope(scope, category) {
+  const selectors = overpassSelectors(category, "")
+    .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(area.searchArea)"))
+    .join("\\n");
+
+  let areaSetup = "";
+  if (scope.osmType === "relation" && /^\\d+$/.test(scope.osmId) && scope.category === "boundary") {
+    const areaId = Number(scope.osmId) + 3600000000;
+    areaSetup = "area(" + areaId + ")->.searchArea;";
+  } else if (scope.bounds) {
+    const { south, north, west, east } = scope.bounds;
+    areaSetup = "nwr(" + south + "," + west + "," + north + "," + east + ")->.searchArea;";
+  } else {
+    const radius = scope.type === "city" || scope.type === "town" ? 12000 : 4500;
+    const circleSelectors = overpassSelectors(category, "")
+      .map(item => item.replaceAll("RADIUS", String(radius)).replaceAll("LAT", String(scope.latitude)).replaceAll("LON", String(scope.longitude)))
+      .join("\\n");
+    return await queryOverpass(scope.latitude, scope.longitude, scope.countryCode, category, "", radius);
+  }
+
+  const overpassQuery = '[out:json][timeout:18];' + areaSetup + '(' + selectors + ');out center tags 100;';
+  const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": SEARCH_USER_AGENT
+      },
+      body: "data=" + encodeURIComponent(overpassQuery),
+      signal: AbortSignal.timeout(20000)
+    });
+    if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
+    const data = await response.json();
+    if (!Array.isArray(data.elements)) throw new Error(new URL(endpoint).hostname + " returned invalid data");
+    return data.elements;
+  });
+  try {
+    return await Promise.any(attempts);
+  } catch (error) {
+    const failures = Array.isArray(error?.errors) ? error.errors : [];
+    const details = failures.map(item => String(item?.message || item).slice(0, 100)).join("; ");
+    throw new Error(details || "Place-scope Overpass search unavailable");
+  }
+}
+
+async function queryPhotonGlobal(category, query, centerLat, centerLon) {
+  const tags = PHOTON_TAGS[category] || [];
+  const searchText = photonSearchText(correctKnownSearchTerms(query));
+  if (!tags.length) return [];
+  const attempts = tags.map(async tag => {
+    const target = new URL("https://photon.komoot.io/api/");
+    target.searchParams.set("lat", String(centerLat));
+    target.searchParams.set("lon", String(centerLon));
+    target.searchParams.set("limit", "50");
+    target.searchParams.set("lang", "en");
+    target.searchParams.set("distance_sort", "true");
+    if (searchText) {
+      target.searchParams.set("q", searchText);
+      target.searchParams.set("osm_tag", tag);
+    } else {
+      const [key, value] = tag.split(":");
+      target.searchParams.set("include", "osm." + key + "." + value);
+    }
+    const response = await fetch(target.toString(), {
+      headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) throw new Error("Photon global search HTTP " + response.status);
+    const payload = await response.json();
+    if (!Array.isArray(payload.features)) throw new Error("Photon global search returned invalid data");
+    return payload.features;
+  });
+
+  const settled = await Promise.allSettled(attempts);
+  const seen = new Set();
+  const elements = [];
+  for (const result of settled) {
+    if (result.status !== "fulfilled") continue;
+    for (const feature of result.value) {
+      const properties = feature.properties || {};
+      const coordinates = feature.geometry?.coordinates || [];
+      const lat = Number(coordinates[1]), lon = Number(coordinates[0]);
+      const osmType = String(properties.osm_type || "N");
+      const osmId = String(properties.osm_id || "");
+      const id = osmType + "/" + osmId;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || !osmId || seen.has(id)) continue;
+      seen.add(id);
+      const tagsForElement = { ...(properties.extra || {}) };
+      if (properties.name) tagsForElement.name = properties.name;
+      if (properties.brand) tagsForElement.brand = properties.brand;
+      if (properties.city || properties.town || properties.village) tagsForElement["addr:city"] = properties.city || properties.town || properties.village;
+      if (properties.state) tagsForElement["addr:state"] = properties.state;
+      if (properties.country) tagsForElement["addr:country"] = properties.country;
+      if (properties.suburb || properties.district) tagsForElement["addr:suburb"] = properties.suburb || properties.district;
+      if (properties.countrycode) tagsForElement["addr:country_code"] = properties.countrycode;
+      if (properties.osm_key && properties.osm_value) tagsForElement[properties.osm_key] = properties.osm_value;
+      elements.push({
+        type: osmType === "W" ? "way" : osmType === "R" ? "relation" : "node",
+        id: osmId,
+        lat,
+        lon,
+        tags: tagsForElement
+      });
+    }
+  }
+  console.info("[HorusSearch] Global Photon fallback completed", category, elements.length);
+  return elements;
+}
+
 async function queryPhotonCountry(countryCode, category, query, centerLat, centerLon) {
   const tags = PHOTON_TAGS[category] || [];
   const searchText = photonSearchText(correctKnownSearchTerms(query));
