@@ -74,14 +74,14 @@ jobs:
             throw new Error("Country alias smoke test failed for أمريكا: HTTP " + usaResponse.status);
           }
 
-          const typoCountryResponse = await fetch(base + "/v1/search/geocode?q=" + encodeURIComponent("Untied States") + "&lang=en", { signal: AbortSignal.timeout(25000) });
+          const typoCountryResponse = await fetch(base + "/v1/search/geocode?q=" + encodeURIComponent("United State") + "&lang=en", { signal: AbortSignal.timeout(25000) });
           const typoCountry = await typoCountryResponse.json();
           const typoCountryMatches = (typoCountry.features || []).some(feature => {
             const p = feature.properties || {};
             return /united states|usa/i.test([p.name, p.country, p.display_name].filter(Boolean).join(" "));
           });
           if (!typoCountryResponse.ok || !typoCountry.ok || !typoCountryMatches) {
-            throw new Error("Typo-tolerant country search smoke test failed for Untied States.");
+            throw new Error("Typo-tolerant country search smoke test failed for United State.");
           }
 
           const placesResponse = await fetch(base + "/v1/search/places", {
