@@ -255,6 +255,108 @@ async function queryOverpass(lat, lon, countryCode, category, query, radius) {
   }
 }
 
+const PHOTON_TAGS = {
+  mosque: ["amenity:place_of_worship"],
+  supermarket: ["shop:supermarket", "shop:convenience", "shop:department_store"],
+  pharmacy: ["amenity:pharmacy", "shop:chemist"],
+  hospital: ["amenity:hospital", "healthcare:hospital"],
+  restaurant: ["amenity:restaurant", "amenity:fast_food"],
+  fuel: ["amenity:fuel"]
+};
+
+function photonSearchText(query) {
+  const value = String(query || "").trim();
+  if (/بنده|panda/i.test(value)) return "Panda";
+  if (/كارفور|carrefour/i.test(value)) return "Carrefour";
+  if (/لولو|lulu/i.test(value)) return "Lulu";
+  if (/دانوب|danube/i.test(value)) return "Danube";
+  if (/العثيم|othaim/i.test(value)) return "Othaim";
+  if (/النهدي|nahdi/i.test(value)) return "Nahdi";
+  return value;
+}
+
+async function queryPhoton(lat, lon, category, query, radius) {
+  const tags = PHOTON_TAGS[category] || [];
+  if (!tags.length) throw new Error("Photon does not support this place category");
+
+  const searchText = photonSearchText(query);
+  const attempts = tags.map(async tag => {
+    const target = new URL(searchText ? "https://photon.komoot.io/api/" : "https://photon.komoot.io/reverse");
+    target.searchParams.set("lat", String(lat));
+    target.searchParams.set("lon", String(lon));
+    target.searchParams.set("limit", "50");
+    target.searchParams.set("lang", "en");
+    target.searchParams.set("osm_tag", tag);
+    if (searchText) {
+      target.searchParams.set("q", searchText);
+      target.searchParams.set("zoom", "10");
+      target.searchParams.set("location_bias_scale", "0.1");
+    } else {
+      target.searchParams.set("radius", String(radius / 1000));
+      target.searchParams.set("distance_sort", "true");
+    }
+
+    const response = await fetch(target.toString(), {
+      headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) throw new Error("Photon " + tag + " HTTP " + response.status);
+    const payload = await response.json();
+    if (!Array.isArray(payload.features)) throw new Error("Photon " + tag + " returned invalid data");
+    return payload.features;
+  });
+
+  const settled = await Promise.allSettled(attempts);
+  const successful = settled.filter(item => item.status === "fulfilled");
+  if (!successful.length) {
+    const details = settled.map(item => item.status === "rejected" ? String(item.reason?.message || item.reason) : "")
+      .filter(Boolean).join("; ");
+    throw new Error(details || "Photon unavailable");
+  }
+
+  const seen = new Set();
+  const elements = [];
+  for (const attempt of successful) {
+    for (const feature of attempt.value) {
+      const properties = feature.properties || {};
+      const coordinates = feature.geometry?.coordinates || [];
+      const elementLat = Number(coordinates[1]);
+      const elementLon = Number(coordinates[0]);
+      if (!Number.isFinite(elementLat) || !Number.isFinite(elementLon)) continue;
+      if (haversineMeters(lat, lon, elementLat, elementLon) > radius) continue;
+      const osmType = String(properties.osm_type || "N");
+      const osmId = String(properties.osm_id || "");
+      const id = osmType + "/" + osmId;
+      if (!osmId || seen.has(id)) continue;
+      seen.add(id);
+
+      const tagsForElement = { ...(properties.extra || {}) };
+      if (properties.name) tagsForElement.name = properties.name;
+      if (properties.brand) tagsForElement.brand = properties.brand;
+      if (properties.street) tagsForElement["addr:street"] = properties.street;
+      if (properties.city || properties.town || properties.village) {
+        tagsForElement["addr:city"] = properties.city || properties.town || properties.village;
+      }
+      if (properties.osm_key && properties.osm_value) {
+        tagsForElement[properties.osm_key] = properties.osm_value;
+      }
+      if (category === "mosque") {
+        const religion = String(tagsForElement.religion || "").toLowerCase();
+        if (religion && religion !== "muslim" && religion !== "islam") continue;
+      }
+      elements.push({
+        type: osmType === "W" ? "way" : osmType === "R" ? "relation" : "node",
+        id: osmId,
+        lat: elementLat,
+        lon: elementLon,
+        tags: tagsForElement
+      });
+    }
+  }
+  console.info("[HorusSearch] Photon fallback completed", category, elements.length);
+  return elements;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -410,11 +512,19 @@ export default {
         // route's handler and returned as a controlled API error, not a Worker 500.
         return await cachedJson(env, cacheKey, 900, async () => {
           let elements = [];
-          let usedRadius = 50000;
-          for (const radius of [10000, 25000]) {
-            usedRadius = radius;
-            elements = await queryOverpass(latitude, longitude, countryCode, category, query, radius);
-            if (elements.length > 0) break;
+          let usedRadius = 25000;
+          try {
+            for (const radius of [10000, 25000]) {
+              usedRadius = radius;
+              elements = await queryOverpass(latitude, longitude, countryCode, category, query, radius);
+              if (elements.length > 0) break;
+            }
+          } catch (overpassError) {
+            console.warn("[HorusSearch] Overpass unavailable; switching to Photon", String(overpassError?.message || overpassError).slice(0, 180));
+          }
+          if (elements.length === 0) {
+            elements = await queryPhoton(latitude, longitude, category, query, 25000);
+            usedRadius = 25000;
           }
           const results = [];
           const seen = new Set();
