@@ -376,7 +376,7 @@ async function queryPhotonCountry(countryCode, category, query, centerLat, cente
       target.searchParams.set("lon", String(centerLon));
       target.searchParams.set("radius", "5000");
     }
-    target.searchParams.set("countrycode", countryCode.toLowerCase());
+    target.searchParams.set("countrycode", countryCode.toUpperCase());
     target.searchParams.set("limit", "50");
     target.searchParams.set("lang", "en");
     target.searchParams.set("osm_tag", tag);
