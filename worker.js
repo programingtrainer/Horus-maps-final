@@ -185,68 +185,74 @@ function overpassSelectors(category, query) {
     : "";
   if (category === "mosque") {
     return [
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="place_of_worship"]["religion"~"muslim|islam",i]' + nameFilter + ';',
-      'nwr(area.country)(around:RADIUS,LAT,LON)["building"="mosque"]' + nameFilter + ';'
+      'nwr(around:RADIUS,LAT,LON)["amenity"="place_of_worship"]["religion"~"muslim|islam",i]' + nameFilter + ';',
+      'nwr(around:RADIUS,LAT,LON)["building"="mosque"]' + nameFilter + ';'
     ];
   }
   if (category === "supermarket") {
     return [
-      'nwr(area.country)(around:RADIUS,LAT,LON)["shop"~"supermarket|convenience|department_store"]' + nameFilter + ';'
+      'nwr(around:RADIUS,LAT,LON)["shop"~"supermarket|convenience|department_store"]' + nameFilter + ';'
     ];
   }
   if (category === "pharmacy") {
     return [
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="pharmacy"]' + nameFilter + ';',
-      'nwr(area.country)(around:RADIUS,LAT,LON)["shop"="chemist"]' + nameFilter + ';'
+      'nwr(around:RADIUS,LAT,LON)["amenity"="pharmacy"]' + nameFilter + ';',
+      'nwr(around:RADIUS,LAT,LON)["shop"="chemist"]' + nameFilter + ';'
     ];
   }
   if (category === "hospital") {
     return [
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="hospital"]' + nameFilter + ';',
-      'nwr(area.country)(around:RADIUS,LAT,LON)["healthcare"="hospital"]' + nameFilter + ';'
+      'nwr(around:RADIUS,LAT,LON)["amenity"="hospital"]' + nameFilter + ';',
+      'nwr(around:RADIUS,LAT,LON)["healthcare"="hospital"]' + nameFilter + ';'
     ];
   }
   if (category === "restaurant") {
     return [
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="restaurant"]' + nameFilter + ';',
-      'nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="fast_food"]' + nameFilter + ';'
+      'nwr(around:RADIUS,LAT,LON)["amenity"="restaurant"]' + nameFilter + ';',
+      'nwr(around:RADIUS,LAT,LON)["amenity"="fast_food"]' + nameFilter + ';'
     ];
   }
   if (category === "fuel") {
-    return ['nwr(area.country)(around:RADIUS,LAT,LON)["amenity"="fuel"]' + nameFilter + ';'];
+    return ['nwr(around:RADIUS,LAT,LON)["amenity"="fuel"]' + nameFilter + ';'];
   }
   return [];
 }
 
 async function queryOverpass(lat, lon, countryCode, category, query, radius) {
+  // The radius already constrains the search around the device position. Avoid
+  // a country-area lookup here: it adds an expensive global area dependency
+  // and can make otherwise simple nearby-POI queries time out.
   const selectors = overpassSelectors(category, query)
     .map(item => item.replaceAll("RADIUS", String(radius)).replaceAll("LAT", String(lat)).replaceAll("LON", String(lon)))
     .join("\n");
-  const overpassQuery = '[out:json][timeout:14];area["ISO3166-1"="' + countryCode.toUpperCase() + '"]["admin_level"="2"]->.country;(' +
-    selectors + ');out center tags 80;';
-  let lastError = null;
-  for (const endpoint of SEARCH_OVERPASS_ENDPOINTS) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-          "User-Agent": SEARCH_USER_AGENT
-        },
-        body: "data=" + encodeURIComponent(overpassQuery),
-        signal: AbortSignal.timeout(10000)
-      });
-      if (!response.ok) {
-        lastError = new Error("Overpass HTTP " + response.status);
-        continue;
-      }
-      const data = await response.json();
-      return Array.isArray(data.elements) ? data.elements : [];
-    } catch (error) {
-      lastError = error;
-    }
+  const overpassQuery = '[out:json][timeout:8];(' + selectors + ');out center tags 80;';
+
+  // Try public Overpass instances concurrently. Sequential retries could use
+  // most of the Android request timeout even when one mirror is healthy.
+  const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": SEARCH_USER_AGENT
+      },
+      body: "data=" + encodeURIComponent(overpassQuery),
+      signal: AbortSignal.timeout(9000)
+    });
+    if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
+    const data = await response.json();
+    if (!Array.isArray(data.elements)) throw new Error(new URL(endpoint).hostname + " returned invalid data");
+    return data.elements;
+  });
+
+  try {
+    return await Promise.any(attempts);
+  } catch (error) {
+    const failures = Array.isArray(error?.errors) ? error.errors : [];
+    const details = failures.map(item => String(item?.message || item).slice(0, 100)).join("; ");
+    console.error("[HorusSearch] All Overpass mirrors failed", details);
+    throw new Error(details || "Overpass unavailable");
   }
-  throw lastError || new Error("Overpass unavailable");
 }
 
 export default {
@@ -405,7 +411,7 @@ export default {
         return await cachedJson(env, cacheKey, 900, async () => {
           let elements = [];
           let usedRadius = 50000;
-          for (const radius of [50000, 150000]) {
+          for (const radius of [10000, 25000]) {
             usedRadius = radius;
             elements = await queryOverpass(latitude, longitude, countryCode, category, query, radius);
             if (elements.length > 0) break;
