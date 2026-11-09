@@ -560,6 +560,112 @@ async function queryPhotonGlobal(category, query, centerLat, centerLon) {
   return elements;
 }
 
+async function queryNominatimPlaces(category, query, centerLat, centerLon, options = {}) {
+  const target = new URL("https://nominatim.openstreetmap.org/search");
+  target.searchParams.set("format", "jsonv2");
+  target.searchParams.set("addressdetails", "1");
+  target.searchParams.set("extratags", "1");
+  target.searchParams.set("namedetails", "1");
+  target.searchParams.set("limit", "30");
+  target.searchParams.set("accept-language", "ar,en");
+  target.searchParams.set("layer", "poi");
+
+  const searchText = photonSearchText(correctKnownSearchTerms(query));
+  const amenityByCategory = {
+    mosque: "place_of_worship",
+    hospital: "hospital",
+    pharmacy: "pharmacy",
+    restaurant: "restaurant",
+    fuel: "fuel"
+  };
+
+  if (searchText) {
+    target.searchParams.set("q", searchText);
+  } else if (amenityByCategory[category]) {
+    target.searchParams.set("amenity", amenityByCategory[category]);
+  } else if (category === "supermarket") {
+    // Nominatim maps the special phrase "supermarket" to shop=supermarket.
+    target.searchParams.set("q", "supermarket");
+  }
+
+  if (options.countryCode) {
+    target.searchParams.set("countrycodes", String(options.countryCode).toLowerCase());
+  }
+
+  const bounds = options.bounds;
+  if (bounds) {
+    target.searchParams.set("viewbox", [bounds.west, bounds.north, bounds.east, bounds.south].join(","));
+    target.searchParams.set("bounded", "1");
+  } else if (!options.countryCode && Number.isFinite(centerLat) && Number.isFinite(centerLon)) {
+    const latDelta = 0.25;
+    const lonDelta = 0.25 / Math.max(0.2, Math.cos(centerLat * Math.PI / 180));
+    target.searchParams.set("viewbox", [
+      centerLon - lonDelta, centerLat + latDelta, centerLon + lonDelta, centerLat - latDelta
+    ].join(","));
+    target.searchParams.set("bounded", "1");
+  }
+
+  const response = await fetch(target.toString(), {
+    headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+    signal: AbortSignal.timeout(12000)
+  });
+  if (!response.ok) throw new Error("Nominatim POI fallback HTTP " + response.status);
+  const payload = await response.json();
+  if (!Array.isArray(payload)) throw new Error("Nominatim POI fallback returned invalid data");
+
+  const elements = [];
+  for (const item of payload) {
+    const itemClass = String(item.class || item.category || "").toLowerCase();
+    const itemType = String(item.type || "").toLowerCase();
+    const extra = item.extratags || {};
+    const address = item.address || {};
+    let matchesCategory = false;
+    if (category === "mosque") {
+      matchesCategory = (itemClass === "amenity" && itemType === "place_of_worship" &&
+        (!extra.religion || /muslim|islam/i.test(String(extra.religion)))) ||
+        (itemClass === "building" && itemType === "mosque");
+    } else if (category === "supermarket") {
+      matchesCategory = itemClass === "shop" && ["supermarket", "convenience", "department_store"].includes(itemType);
+    } else if (category === "hospital") {
+      matchesCategory = (itemClass === "amenity" && itemType === "hospital") ||
+        (itemClass === "healthcare" && itemType === "hospital");
+    } else if (category === "pharmacy") {
+      matchesCategory = (itemClass === "amenity" && itemType === "pharmacy") ||
+        (itemClass === "shop" && itemType === "chemist");
+    } else if (category === "restaurant") {
+      matchesCategory = itemClass === "amenity" && ["restaurant", "fast_food"].includes(itemType);
+    } else if (category === "fuel") {
+      matchesCategory = itemClass === "amenity" && itemType === "fuel";
+    }
+    if (!matchesCategory) continue;
+
+    const lat = Number(item.lat), lon = Number(item.lon);
+    const osmId = String(item.osm_id || "");
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !osmId) continue;
+    const osmType = String(item.osm_type || "node").toLowerCase();
+    const tags = { ...extra };
+    const name = String(item.name || item.namedetails?.name || item.display_name?.split(",")[0] || "مكان بدون اسم");
+    tags.name = name;
+    if (extra.brand) tags.brand = extra.brand;
+    if (address.road) tags["addr:street"] = address.road;
+    if (address.suburb || address.neighbourhood || address.quarter) tags["addr:suburb"] = address.suburb || address.neighbourhood || address.quarter;
+    if (address.city || address.town || address.village) tags["addr:city"] = address.city || address.town || address.village;
+    if (address.state || address.county) tags["addr:state"] = address.state || address.county;
+    if (address.country) tags["addr:country"] = address.country;
+    if (address.country_code) tags["addr:country_code"] = address.country_code;
+    elements.push({
+      type: osmType === "way" ? "way" : osmType === "relation" ? "relation" : "node",
+      id: osmId,
+      lat,
+      lon,
+      tags
+    });
+  }
+
+  console.info("[HorusSearch] Nominatim POI fallback completed", category, elements.length);
+  return elements;
+}
+
 async function queryPhotonCountry(countryCode, category, query, centerLat, centerLon) {
   const tags = PHOTON_TAGS[category] || [];
   const searchText = photonSearchText(correctKnownSearchTerms(query));
