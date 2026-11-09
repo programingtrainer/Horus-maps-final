@@ -393,6 +393,12 @@ class MainActivity : ComponentActivity() {
                 }
                 searchBoundaryHandler.postDelayed({
                     runCatching { source.setGeoJson("""{"type":"FeatureCollection","features":[]}""") }
+                    // The red pin is the point annotation created for this same
+                    // geographic selection. Remove it when the boundary finishes fading.
+                    searchMarker?.let { marker ->
+                        runCatching { map.removeAnnotation(marker) }
+                        if (searchMarker === marker) searchMarker = null
+                    }
                 }, 1550L)
             }
             searchBoundaryClearRunnable = clear
