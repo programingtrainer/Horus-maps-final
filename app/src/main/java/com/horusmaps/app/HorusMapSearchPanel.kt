@@ -57,6 +57,7 @@ fun HorusMapSearchPanel(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     loading: Boolean,
+    hasSearched: Boolean,
     error: String?,
     selectedCategory: HorusSearchCategory?,
     geographyResults: List<HorusGeoSearchResult>,
@@ -174,7 +175,7 @@ fun HorusMapSearchPanel(
                         )
                     }
 
-                    if (!loading && selectedCategory != null && nearbyResults.isEmpty() && error.isNullOrBlank() && query.isNotBlank()) {
+                    if (hasSearched && !loading && selectedCategory != null && nearbyResults.isEmpty() && error.isNullOrBlank() && query.isNotBlank()) {
                         Text(
                             "لا توجد نتائج قريبة مطابقة داخل دولتك. جرّب اسمًا آخر أو فئة مختلفة.",
                             modifier = Modifier.padding(horizontal = 8.dp),
