@@ -306,6 +306,7 @@ async function resolveCountryScope(query) {
       return {
         countryCode: code,
         query: words.slice(0, words.length - count).join(" ").replace(/\b(in)\s*$/i, "").trim(),
+        matchedWords: count,
         latitude: Number(coordinates[1]),
         longitude: Number(coordinates[0])
       };
@@ -634,11 +635,13 @@ export default {
         let countryCode = String(body.countryCode || "").trim().toUpperCase();
         const category = String(body.category || "").trim().toLowerCase();
         let query = String(body.query || "").trim().slice(0, 64);
-        const countryScope = await resolveCountryScope(query);
+        const rawQuery = String(body.rawQuery || query).trim().slice(0, 120);
+        const countryScope = await resolveCountryScope(rawQuery);
         const globalCountrySearch = Boolean(countryScope);
         if (countryScope) {
           countryCode = countryScope.countryCode;
-          query = countryScope.query;
+          const queryWords = query.split(/\s+/).filter(Boolean);
+          query = queryWords.slice(0, Math.max(0, queryWords.length - countryScope.matchedWords)).join(" ").trim();
         }
         const allowed = new Set(["mosque", "supermarket", "hospital", "pharmacy", "restaurant", "fuel"]);
         if (latitude === null || longitude === null || !/^[A-Z]{2}$/.test(countryCode) || !allowed.has(category)) {
