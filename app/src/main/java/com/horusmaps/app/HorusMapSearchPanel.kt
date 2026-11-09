@@ -69,24 +69,24 @@ fun HorusMapSearchPanel(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
+        modifier = modifier.fillMaxWidth(0.94f),
+        shape = RoundedCornerShape(19.dp),
         color = Color.White,
         shadowElevation = 10.dp
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = onQueryChange,
-                    modifier = Modifier.weight(1f).onFocusChanged {
+                    modifier = Modifier.weight(1f).heightIn(min = 50.dp).onFocusChanged {
                         if (it.isFocused) onExpandedChange(true)
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(14.dp),
                     placeholder = { Text("ابحث عن دولة أو قارة أو مكان...", fontSize = 13.sp) },
                     leadingIcon = {
                         Icon(Icons.Filled.Search, contentDescription = null, tint = Color(0xFF287FE8))
@@ -184,7 +184,7 @@ fun HorusMapSearchPanel(
                     }
 
                     LazyColumn(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 340.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 270.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         if (selectedCategory == null) {
