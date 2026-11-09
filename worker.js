@@ -272,6 +272,79 @@ function overpassSelectors(category, query) {
   return [];
 }
 
+async function resolveCountryScope(query) {
+  const words = String(query || "").trim().split(/\\s+/).filter(Boolean);
+  if (words.length < 2) return null;
+  const connectors = new Set(["in", "داخل", "في", "ب", "بدولة", "دوله"]);
+  for (let count = Math.min(4, words.length - 1); count >= 1; count--) {
+    let suffixWords = words.slice(-count);
+    while (suffixWords.length && connectors.has(normalizeSearchText(suffixWords[0]))) suffixWords = suffixWords.slice(1);
+    if (!suffixWords.length) continue;
+    const suffix = suffixWords.join(" ");
+    const target = new URL("https://photon.komoot.io/api/");
+    target.searchParams.set("q", suffix);
+    target.searchParams.set("limit", "8");
+    target.searchParams.set("lang", "en");
+    try {
+      const response = await fetch(target.toString(), {
+        headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+        signal: AbortSignal.timeout(6500)
+      });
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const feature = (payload.features || []).find(item => {
+        const p = item.properties || {};
+        const type = String(p.type || p.osm_value || "").toLowerCase();
+        const name = normalizeSearchText(p.name || "");
+        return type === "country" && (name === normalizeSearchText(suffix) || normalizeSearchText(p.country || "") === normalizeSearchText(suffix));
+      });
+      if (!feature) continue;
+      const p = feature.properties || {};
+      const code = String(p.countrycode || "").toUpperCase();
+      const coordinates = feature.geometry?.coordinates || [];
+      if (!/^[A-Z]{2}$/.test(code)) continue;
+      return {
+        countryCode: code,
+        query: words.slice(0, words.length - count).join(" ").replace(/\\b(in)\\s*$/i, "").trim(),
+        latitude: Number(coordinates[1]),
+        longitude: Number(coordinates[0])
+      };
+    } catch (error) {
+      console.warn("[HorusSearch] Country scope resolution failed", String(error?.message || error).slice(0, 100));
+    }
+  }
+  return null;
+}
+
+async function queryOverpassCountry(countryCode, category, query) {
+  const selectors = overpassSelectors(category, query)
+    .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(area.searchArea)"))
+    .join("\\n");
+  const overpassQuery = '[out:json][timeout:20];area["ISO3166-1"="' + countryCode + '"]->.searchArea;(' + selectors + ');out center tags 80;';
+  const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": SEARCH_USER_AGENT
+      },
+      body: "data=" + encodeURIComponent(overpassQuery),
+      signal: AbortSignal.timeout(22000)
+    });
+    if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
+    const data = await response.json();
+    if (!Array.isArray(data.elements)) throw new Error(new URL(endpoint).hostname + " returned invalid data");
+    return data.elements;
+  });
+  try {
+    return await Promise.any(attempts);
+  } catch (error) {
+    const failures = Array.isArray(error?.errors) ? error.errors : [];
+    const details = failures.map(item => String(item?.message || item).slice(0, 100)).join("; ");
+    throw new Error(details || "Country-wide Overpass search unavailable");
+  }
+}
+
 async function queryOverpass(lat, lon, countryCode, category, query, radius) {
   // The radius already constrains the search around the device position. Avoid
   // a country-area lookup here: it adds an expensive global area dependency
@@ -558,32 +631,44 @@ export default {
         const body = await readJson(request);
         const latitude = validCoordinate(body.latitude, -90, 90);
         const longitude = validCoordinate(body.longitude, -180, 180);
-        const countryCode = String(body.countryCode || "").trim().toUpperCase();
+        let countryCode = String(body.countryCode || "").trim().toUpperCase();
         const category = String(body.category || "").trim().toLowerCase();
-        const query = String(body.query || "").trim().slice(0, 64);
+        let query = String(body.query || "").trim().slice(0, 64);
+        const countryScope = await resolveCountryScope(query);
+        const globalCountrySearch = Boolean(countryScope);
+        if (countryScope) {
+          countryCode = countryScope.countryCode;
+          query = countryScope.query;
+        }
         const allowed = new Set(["mosque", "supermarket", "hospital", "pharmacy", "restaurant", "fuel"]);
         if (latitude === null || longitude === null || !/^[A-Z]{2}$/.test(countryCode) || !allowed.has(category)) {
           return json({ ok: false, error: "بيانات البحث عن الأماكن غير مكتملة أو غير صالحة." }, 400);
         }
-        const cacheKey = "places:v1:" + countryCode + ":" + category + ":" + query.toLocaleLowerCase() + ":" +
-          latitude.toFixed(3) + ":" + longitude.toFixed(3);
+        const sortLatitude = globalCountrySearch && Number.isFinite(countryScope.latitude) ? countryScope.latitude : latitude;
+        const sortLongitude = globalCountrySearch && Number.isFinite(countryScope.longitude) ? countryScope.longitude : longitude;
+        const cacheKey = "places:v2:" + countryCode + ":" + category + ":" + query.toLocaleLowerCase() + ":" +
+          (globalCountrySearch ? "country" : latitude.toFixed(3) + ":" + longitude.toFixed(3));
         // Await the cached operation so upstream failures are caught by this
         // route's handler and returned as a controlled API error, not a Worker 500.
         return await cachedJson(env, cacheKey, 900, async () => {
           let elements = [];
-          let usedRadius = 25000;
-          try {
-            for (const radius of [10000, 25000]) {
-              usedRadius = radius;
-              elements = await queryOverpass(latitude, longitude, countryCode, category, query, radius);
-              if (elements.length > 0) break;
+          let usedRadius = globalCountrySearch ? 0 : 25000;
+          if (globalCountrySearch) {
+            elements = await queryOverpassCountry(countryCode, category, query);
+          } else {
+            try {
+              for (const radius of [10000, 25000]) {
+                usedRadius = radius;
+                elements = await queryOverpass(latitude, longitude, countryCode, category, query, radius);
+                if (elements.length > 0) break;
+              }
+            } catch (overpassError) {
+              console.warn("[HorusSearch] Overpass unavailable; switching to Photon", String(overpassError?.message || overpassError).slice(0, 180));
             }
-          } catch (overpassError) {
-            console.warn("[HorusSearch] Overpass unavailable; switching to Photon", String(overpassError?.message || overpassError).slice(0, 180));
-          }
-          if (elements.length === 0) {
-            elements = await queryPhoton(latitude, longitude, category, query, 25000);
-            usedRadius = 25000;
+            if (elements.length === 0) {
+              elements = await queryPhoton(latitude, longitude, category, query, 25000);
+              usedRadius = 25000;
+            }
           }
           const results = [];
           const seen = new Set();
@@ -602,14 +687,14 @@ export default {
               latitude: lat,
               longitude: lon,
               type: category,
-              distanceMeters: Math.round(haversineMeters(latitude, longitude, lat, lon)),
+              distanceMeters: Math.round(haversineMeters(sortLatitude, sortLongitude, lat, lon)),
               address: [tags["addr:street"], tags["addr:suburb"], tags["addr:city"] || tags["addr:town"]].filter(Boolean).join("، "),
               brand: String(tags.brand || ""),
               openingHours: String(tags.opening_hours || "")
             });
           }
           results.sort((a, b) => a.distanceMeters - b.distanceMeters);
-          return json({ ok: true, countryCode: countryCode.toLowerCase(), radiusMeters: usedRadius, results: results.slice(0, 40) });
+          return json({ ok: true, countryCode: countryCode.toLowerCase(), searchScope: globalCountrySearch ? "country" : "nearby", radiusMeters: usedRadius, results: results.slice(0, 40) });
         });
       } catch (error) {
         console.error("[HorusSearch] Nearby search failed", String(error?.message || error).slice(0, 220));
