@@ -753,7 +753,7 @@ export default {
         }
         const sortLatitude = globalCountrySearch && Number.isFinite(countryScope.latitude) ? countryScope.latitude : latitude;
         const sortLongitude = globalCountrySearch && Number.isFinite(countryScope.longitude) ? countryScope.longitude : longitude;
-        const cacheKey = "places:v2:" + countryCode + ":" + category + ":" + query.toLocaleLowerCase() + ":" +
+        const cacheKey = "places:v3:" + countryCode + ":" + category + ":" + query.toLocaleLowerCase() + ":" +
           (globalCountrySearch ? "country" : latitude.toFixed(3) + ":" + longitude.toFixed(3));
         // Await the cached operation so upstream failures are caught by this
         // route's handler and returned as a controlled API error, not a Worker 500.
