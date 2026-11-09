@@ -22,11 +22,11 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
             val value = normalize(raw)
             return when {
                 listOf("مسجد", "مساجد", "جامع", "جوامع", "مصلى", "mosque", "mosques", "masjid", "prayer hall").any { matchesTerm(value, it) } -> MOSQUE
-                listOf("سوبرماركت", "سوبر ماركت", "ماركت", "متجر", "بقالة", "supermarket", "super market", "grocery", "market", "بنده", "panda", "كارفور", "carrefour", "لولو", "lulu", "دانوب", "danube", "العثيم", "othaim").any { matchesTerm(value, it) } -> SUPERMARKET
-                listOf("مستشفى", "مستشفي", "مستشفيات", "مستشفيّات", "hospital", "hospitals", "clinic").any { matchesTerm(value, it) } -> HOSPITAL
-                listOf("صيدلية", "صيدليه", "صيدليات", "صيدليات", "pharmacy", "pharmacies", "chemist", "drugstore").any { matchesTerm(value, it) } -> PHARMACY
-                listOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه", "مقهى").any { matchesTerm(value, it) } -> RESTAURANT
-                listOf("محطة وقود", "محطة بنزين", "بنزين", "وقود", "fuel", "gas station", "petrol", "gasoline").any { matchesTerm(value, it) } -> FUEL
+                listOf("سوبرماركت", "سوبر ماركت", "هايبر ماركت", "هايبرماركت", "ماركت", "متجر", "بقالة", "بقاله", "تموينات", "سوق غذائي", "supermarket", "super market", "hypermarket", "grocery", "grocery store", "market", "بنده", "panda", "كارفور", "carrefour", "لولو", "lulu", "دانوب", "danube", "العثيم", "othaim").any { matchesTerm(value, it) } -> SUPERMARKET
+                listOf("مستشفى", "مستشفي", "مستشفيات", "مستشفيّات", "مركز طبي", "مركز صحي", "مراكز طبية", "hospital", "hospitals", "clinic", "medical center", "medical centre", "healthcare").any { matchesTerm(value, it) } -> HOSPITAL
+                listOf("صيدلية", "صيدليه", "صيدليات", "صيدليات", "صيدليه", "pharmacy", "pharmacies", "chemist", "drugstore", "drug store").any { matchesTerm(value, it) } -> PHARMACY
+                listOf("مطعم", "مطاعم", "مطعم وجبات سريعة", "restaurant", "restaurants", "fast food", "cafe", "coffee shop", "كافيه", "مقهى", "مقاهي").any { matchesTerm(value, it) } -> RESTAURANT
+                listOf("محطة وقود", "محطات وقود", "محطة بنزين", "محطات بنزين", "محطة محروقات", "محطات المحروقات", "بنزين", "وقود", "محروقات", "تعبئة وقود", "fuel", "fuel station", "gas station", "gas stations", "petrol station", "petrol stations", "filling station", "gasoline").any { matchesTerm(value, it) } -> FUEL
                 else -> null
             }
         }
@@ -34,19 +34,24 @@ enum class HorusSearchCategory(val apiValue: String, val title: String) {
         fun queryFor(raw: String, category: HorusSearchCategory): String {
             val genericTokens = when (category) {
                 MOSQUE -> setOf("مسجد", "مساجد", "جامع", "جوامع", "مصلى", "mosque", "mosques", "masjid", "prayer", "hall")
-                SUPERMARKET -> setOf("سوبر", "ماركت", "سوبرماركت", "متجر", "بقالة", "supermarket", "super", "market", "grocery", "shop")
-                HOSPITAL -> setOf("مستشفى", "مستشفي", "مستشفيات", "hospital", "hospitals", "clinic")
-                PHARMACY -> setOf("صيدلية", "صيدليه", "صيدليات", "pharmacy", "pharmacies", "chemist", "drugstore")
-                RESTAURANT -> setOf("مطعم", "مطاعم", "restaurant", "restaurants", "cafe", "كافيه", "مقهى")
-                FUEL -> setOf("محطة", "وقود", "بنزين", "fuel", "gas", "station", "petrol", "gasoline")
+                SUPERMARKET -> setOf("سوبر", "ماركت", "سوبرماركت", "هايبر", "هايبرماركت", "متجر", "بقالة", "بقاله", "تموينات", "supermarket", "super", "market", "hypermarket", "grocery", "shop")
+                HOSPITAL -> setOf("مستشفى", "مستشفي", "مستشفيات", "مركز", "طبي", "صحي", "hospital", "hospitals", "clinic", "medical", "center", "centre", "healthcare")
+                PHARMACY -> setOf("صيدلية", "صيدليه", "صيدليات", "pharmacy", "pharmacies", "chemist", "drugstore", "drug", "store")
+                RESTAURANT -> setOf("مطعم", "مطاعم", "restaurant", "restaurants", "fast", "food", "cafe", "coffee", "shop", "كافيه", "مقهى", "مقاهي")
+                FUEL -> setOf("محطة", "محطات", "وقود", "بنزين", "محروقات", "تعبئة", "fuel", "gas", "station", "stations", "petrol", "gasoline", "filling")
             }.map(::normalize).toSet()
             return normalize(raw).split(" ").filter { token -> token.isNotBlank() && genericTokens.none { generic -> token == generic || (token.length >= 4 && levenshtein(token, generic) <= 1) } }.joinToString(" ")
         }
 
         private fun matchesTerm(value: String, term: String): Boolean {
-            if (value.contains(term)) return true
-            if (term.contains(" ")) return false
-            return value.split(" ").any { token -> token.length >= 4 && levenshtein(token, term) <= 1 }
+            val normalizedTerm = normalize(term)
+            if (normalizedTerm.isBlank()) return false
+            if (value.contains(normalizedTerm)) return true
+            if (normalizedTerm.contains(" ")) {
+                val parts = normalizedTerm.split(" ")
+                return parts.all { part -> value.split(" ").any { token -> token == part || (token.length >= 4 && levenshtein(token, part) <= 1) } }
+            }
+            return value.split(" ").any { token -> token.length >= 4 && levenshtein(token, normalizedTerm) <= 1 }
         }
 
         private fun levenshtein(left: String, right: String): Int {
