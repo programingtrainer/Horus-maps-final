@@ -273,7 +273,7 @@ function overpassSelectors(category, query) {
 }
 
 async function resolveCountryScope(query) {
-  const words = String(query || "").trim().split(/\\s+/).filter(Boolean);
+  const words = String(query || "").trim().split(/\s+/).filter(Boolean);
   if (words.length < 2) return null;
   const connectors = new Set(["in", "داخل", "في", "ب", "بدولة", "دوله"]);
   for (let count = Math.min(4, words.length - 1); count >= 1; count--) {
@@ -305,7 +305,7 @@ async function resolveCountryScope(query) {
       if (!/^[A-Z]{2}$/.test(code)) continue;
       return {
         countryCode: code,
-        query: words.slice(0, words.length - count).join(" ").replace(/\\b(in)\\s*$/i, "").trim(),
+        query: words.slice(0, words.length - count).join(" ").replace(/\b(in)\s*$/i, "").trim(),
         latitude: Number(coordinates[1]),
         longitude: Number(coordinates[0])
       };
@@ -319,7 +319,7 @@ async function resolveCountryScope(query) {
 async function queryOverpassCountry(countryCode, category, query) {
   const selectors = overpassSelectors(category, query)
     .map(item => item.replaceAll("nwr(around:RADIUS,LAT,LON)", "nwr(area.searchArea)"))
-    .join("\\n");
+    .join("\n");
   const overpassQuery = '[out:json][timeout:20];area["ISO3166-1"="' + countryCode + '"]->.searchArea;(' + selectors + ');out center tags 80;';
   const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
     const response = await fetch(endpoint, {
