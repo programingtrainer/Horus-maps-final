@@ -477,7 +477,11 @@ class MainActivity : ComponentActivity() {
         } else {
             val kind = result.kind.lowercase()
             val zoom = when {
-                kind in setOf("village", "hamlet", "suburb", "neighbourhood", "quarter", "locality", "isolated_dwelling") -> 15.0
+                kind in setOf(
+                    "village", "hamlet", "suburb", "neighbourhood", "quarter", "locality",
+                    "isolated_dwelling", "residential", "primary", "secondary", "tertiary",
+                    "unclassified", "service", "pedestrian", "living_street", "road"
+                ) -> 15.0
                 kind in setOf("city", "town") -> 12.5
                 kind in setOf("state", "county", "province", "administrative") -> 7.5
                 else -> 12.0
