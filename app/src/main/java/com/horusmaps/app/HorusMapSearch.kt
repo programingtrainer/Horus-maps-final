@@ -129,12 +129,21 @@ data class HorusRouteStep(
     val longitude: Double
 )
 
+data class HorusTransitStation(
+    val name: String,
+    val latitude: Double,
+    val longitude: Double,
+    val distanceMeters: Int
+)
+
 data class HorusTransportSearchResult(
     val provider: String,
     val available: Boolean,
     val message: String?,
     val options: List<String>,
-    val geometryGeoJson: String? = null
+    val geometryGeoJson: String? = null,
+    val originStations: List<HorusTransitStation> = emptyList(),
+    val destinationStations: List<HorusTransitStation> = emptyList()
 )
 
 data class HorusRouteResult(
@@ -318,20 +327,36 @@ object HorusMapSearchApi {
         val root = JSONObject(post("$BASE_URL/transit", body))
         if (!root.optBoolean("ok")) throw IllegalStateException(root.optString("error", "تعذر البحث عن القطارات."))
         val options = root.optJSONArray("options") ?: JSONArray()
-        val lines = buildList {
-            fun appendStations(key: String, label: String) {
-                val stations = root.optJSONArray(key) ?: JSONArray()
+        fun parseStations(key: String): List<HorusTransitStation> {
+            val stations = root.optJSONArray(key) ?: JSONArray()
+            return buildList {
                 for (stationIndex in 0 until stations.length()) {
                     val station = stations.optJSONObject(stationIndex) ?: continue
-                    val distanceMeters = station.optInt("distanceMeters")
-                    val distanceLabel = if (distanceMeters >= 1000) {
-                        String.format(Locale.US, "%.1f كم", distanceMeters / 1000.0)
-                    } else "$distanceMeters متر"
-                    add("$label: ${station.optString("name", "محطة قطار")} • $distanceLabel")
+                    val latitude = station.optDouble("latitude", Double.NaN)
+                    val longitude = station.optDouble("longitude", Double.NaN)
+                    if (!latitude.isFinite() || !longitude.isFinite()) continue
+                    add(HorusTransitStation(
+                        name = station.optString("name", "محطة قطار"),
+                        latitude = latitude,
+                        longitude = longitude,
+                        distanceMeters = station.optInt("distanceMeters")
+                    ))
                 }
             }
-            appendStations("originStations", "أقرب محطة للبداية")
-            appendStations("destinationStations", "أقرب محطة للوجهة")
+        }
+        val originStations = parseStations("originStations")
+        val destinationStations = parseStations("destinationStations")
+        val lines = buildList {
+            fun appendStations(stations: List<HorusTransitStation>, label: String) {
+                stations.forEach { station ->
+                    val distanceLabel = if (station.distanceMeters >= 1000) {
+                        String.format(Locale.US, "%.1f كم", station.distanceMeters / 1000.0)
+                    } else "${station.distanceMeters} متر"
+                    add("$label: ${station.name} • $distanceLabel")
+                }
+            }
+            appendStations(originStations, "أقرب محطة للبداية")
+            appendStations(destinationStations, "أقرب محطة للوجهة")
             if (options.length() > 0) add("مواعيد القطارات المتاحة:")
             for (index in 0 until options.length()) {
                 val option = options.optJSONObject(index) ?: continue
@@ -361,8 +386,15 @@ object HorusMapSearchApi {
             }
         }
         val firstGeometry = options.optJSONObject(0)?.optJSONObject("geometry")?.toString()
-        HorusTransportSearchResult(root.optString("provider", "Transitous / MOTIS"), root.optBoolean("available"),
-            root.optString("message").takeIf { it.isNotBlank() && it != "null" }, lines, firstGeometry)
+        HorusTransportSearchResult(
+            provider = root.optString("provider", "Transitous / MOTIS"),
+            available = root.optBoolean("available"),
+            message = root.optString("message").takeIf { it.isNotBlank() && it != "null" },
+            options = lines,
+            geometryGeoJson = firstGeometry,
+            originStations = originStations,
+            destinationStations = destinationStations
+        )
     }
 
     suspend fun searchFlights(
