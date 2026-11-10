@@ -199,7 +199,7 @@ function normalizeOagFlight(flight, originAirport, destinationAirport) {
   };
 }
 
-function normalizeIgnavFlight(itinerary, originAirport, destinationAirport) {
+function normalizeIgnavFlight(itinerary, originAirport, destinationAirport, observedAt = "") {
   const outbound = itinerary?.outbound || {};
   const segments = Array.isArray(outbound.segments) ? outbound.segments : [];
   if (!segments.length) return null;
@@ -235,14 +235,14 @@ function normalizeIgnavFlight(itinerary, originAirport, destinationAirport) {
     stops: Math.max(0, segments.length - 1),
     via: segments.slice(0, -1).map(segment => String(segment.arrival_airport || "")).filter(Boolean),
     status: String(itinerary?.price?.status || "سعر مسترجع من Ignav"),
-    updatedAt: String(itinerary?.observed_at || ""),
+    updatedAt: String(itinerary?.observed_at || observedAt || ""),
     source: "Ignav",
     cargo: false,
     ignavId: String(itinerary?.ignav_id || "")
   };
 }
 
-function normalizeIgnavPriceOffer(itinerary) {
+function normalizeIgnavPriceOffer(itinerary, observedAt = "") {
   const outbound = itinerary?.outbound || {};
   const segments = Array.isArray(outbound.segments) ? outbound.segments : [];
   const first = segments[0] || {};
@@ -259,7 +259,7 @@ function normalizeIgnavPriceOffer(itinerary) {
     departureAt: String(first.departure_time_local || first.departure_time_utc || ""),
     stops: Math.max(0, segments.length - 1),
     durationMinutes: Math.max(0, Number(outbound.duration_minutes) || 0),
-    foundAt: String(itinerary?.observed_at || ""),
+    foundAt: String(itinerary?.observed_at || observedAt || ""),
     bookingUrl: "",
     ignavId: String(itinerary?.ignav_id || "")
   };
@@ -1758,11 +1758,11 @@ export default {
             }
             const itineraries = Array.isArray(payload.itineraries) ? payload.itineraries : [];
             const normalized = itineraries
-              .map(item => normalizeIgnavFlight(item, originAirport, destinationAirport))
+              .map(item => normalizeIgnavFlight(item, originAirport, destinationAirport, String(payload.observed_at || "")))
               .filter(item => item && item.flightNumber && item.departure && item.arrival)
               .sort((a, b) => a.departure.localeCompare(b.departure));
             const priceOffers = itineraries
-              .map(normalizeIgnavPriceOffer)
+              .map(item => normalizeIgnavPriceOffer(item, String(payload.observed_at || "")))
               .filter(Boolean)
               .sort((a, b) => a.price - b.price)
               .slice(0, 10);
