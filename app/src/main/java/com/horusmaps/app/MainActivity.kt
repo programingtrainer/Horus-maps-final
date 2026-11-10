@@ -762,9 +762,12 @@ class MainActivity : ComponentActivity() {
                 var navigationDestination by remember { mutableStateOf<HorusNavigationDestination?>(null) }
                 var intercityFinalDestination by remember { mutableStateOf<HorusNavigationDestination?>(null) }
                 var intercityArrivalStation by remember { mutableStateOf<HorusTransitStation?>(null) }
+                var intercityArrivalAirport by remember { mutableStateOf<HorusAirport?>(null) }
                 var intercityStage by remember { mutableStateOf("none") }
                 var intercityItineraryLines by remember { mutableStateOf<List<String>>(emptyList()) }
                 var intercityItineraryMessage by remember { mutableStateOf<String?>(null) }
+                var flightItineraryLines by remember { mutableStateOf<List<String>>(emptyList()) }
+                var flightItineraryMessage by remember { mutableStateOf<String?>(null) }
                 var selectedTravelMode by remember { mutableStateOf("driving") }
                 var calculatedRoute by remember { mutableStateOf<HorusRouteResult?>(null) }
                 var routeCoordinates by remember { mutableStateOf<List<LatLng>>(emptyList()) }
@@ -1208,9 +1211,12 @@ class MainActivity : ComponentActivity() {
                     navigationDestination = null
                     intercityFinalDestination = null
                     intercityArrivalStation = null
+                    intercityArrivalAirport = null
                     intercityStage = "none"
                     intercityItineraryLines = emptyList()
                     intercityItineraryMessage = null
+                    flightItineraryLines = emptyList()
+                    flightItineraryMessage = null
                     navigationError = null
                     routeLoading = false
                 }
@@ -1248,6 +1254,75 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                fun routeToOriginAirport(airport: HorusAirport) {
+                    val finalDestination = navigationDestination ?: return
+                    val flightResult = transportSearchResult
+                    if (flightResult?.available != true || flightResult.options.isEmpty()) {
+                        navigationError = flightResult?.message ?: "ابحث عن عرض طيران متاح قبل التوجه إلى المطار."
+                        return
+                    }
+                    val arrivalAirport = flightResult.destinationAirport
+                    if (arrivalAirport == null) {
+                        navigationError = "لم يتم تحديد مطار وصول صالح لهذا العرض."
+                        return
+                    }
+                    flightItineraryLines = flightResult.options
+                    flightItineraryMessage = flightResult.message
+                    intercityFinalDestination = finalDestination
+                    intercityArrivalAirport = arrivalAirport
+                    intercityStage = "to_origin_airport"
+                    navigationStarted = false
+                    clearCalculatedRoute()
+                    selectedTravelMode = "driving"
+                    navigationDestination = HorusNavigationDestination(
+                        name = airport.name,
+                        address = "مطار المغادرة (${airport.iataCode}) • يبعد ${airport.distanceMeters} متر عن نقطة البداية",
+                        latitude = airport.latitude,
+                        longitude = airport.longitude
+                    )
+                    navigationError = null
+                    mapLibreMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(airport.latitude, airport.longitude), 13.5), 700)
+                }
+
+                fun confirmReachedOriginAirport() {
+                    val arrival = intercityArrivalAirport ?: return
+                    navigationStarted = false
+                    clearCalculatedRoute()
+                    intercityStage = "waiting_flight"
+                    selectedTravelMode = "flight"
+                    navigationDestination = HorusNavigationDestination(
+                        name = arrival.name,
+                        address = "مطار الوصول (${arrival.iataCode}) • اتبع بيانات الرحلة المحددة للوصول إليه",
+                        latitude = arrival.latitude,
+                        longitude = arrival.longitude
+                    )
+                    navigationError = null
+                    mapLibreMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(arrival.latitude, arrival.longitude), 13.5), 700)
+                }
+
+                fun continueToFinalDestination() {
+                    val finalDestination = intercityFinalDestination ?: return
+                    navigationStarted = false
+                    intercityStage = "none"
+                    intercityFinalDestination = null
+                    intercityArrivalStation = null
+                    intercityArrivalAirport = null
+                    intercityItineraryLines = emptyList()
+                    intercityItineraryMessage = null
+                    flightItineraryLines = emptyList()
+                    flightItineraryMessage = null
+                    navigationDestination = finalDestination
+                    selectedTravelMode = "driving"
+                    transportSearchJob?.cancel()
+                    transportSearchResult = null
+                    transportSearchError = null
+                    transportLoading = false
+                    clearCalculatedRoute()
+                    navigationError = null
+                    calculateSelectedRoute()
+                }
+
+                fun confirmReachedArrivalAirport() { continueToFinalDestination() }
                 fun confirmReachedOriginStation() {
                     val arrival = intercityArrivalStation ?: return
                     navigationStarted = false
@@ -1267,24 +1342,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                fun confirmReachedArrivalStation() {
-                    val finalDestination = intercityFinalDestination ?: return
-                    navigationStarted = false
-                    intercityStage = "none"
-                    intercityFinalDestination = null
-                    intercityArrivalStation = null
-                    intercityItineraryLines = emptyList()
-                    intercityItineraryMessage = null
-                    navigationDestination = finalDestination
-                    selectedTravelMode = "driving"
-                    transportSearchJob?.cancel()
-                    transportSearchResult = null
-                    transportSearchError = null
-                    transportLoading = false
-                    clearCalculatedRoute()
-                    navigationError = null
-                    calculateSelectedRoute()
-                }
+                fun confirmReachedArrivalStation() { continueToFinalDestination() }
 
                 fun selectGeographyResult(result: HorusGeoSearchResult) {
                     clearCalculatedRoute()
@@ -1716,10 +1774,17 @@ class MainActivity : ComponentActivity() {
                                     originStations = transportSearchResult?.originStations.orEmpty(),
                                     destinationStations = transportSearchResult?.destinationStations.orEmpty(),
                                     onRouteToOriginStation = { station -> routeToOriginStation(station) },
+                                    originAirport = transportSearchResult?.originAirport,
+                                    destinationAirport = transportSearchResult?.destinationAirport,
+                                    onRouteToOriginAirport = { airport -> routeToOriginAirport(airport) },
                                     waitingForTrainArrival = intercityStage == "waiting_train",
+                                    waitingForFlightArrival = intercityStage == "waiting_flight",
                                     intercityItineraryLines = intercityItineraryLines,
                                     intercityItineraryMessage = intercityItineraryMessage,
+                                    flightItineraryLines = flightItineraryLines,
+                                    flightItineraryMessage = flightItineraryMessage,
                                     onConfirmTrainArrival = { confirmReachedArrivalStation() },
+                                    onConfirmFlightArrival = { confirmReachedArrivalAirport() },
                                     onSearchTransport = { searchSelectedTransport() },
                                     onPickDate = { chooseTravelDate() },
                                     allowIntercityModes = navigationDestination?.isLocalPlace != true && intercityStage == "none",
@@ -1777,10 +1842,17 @@ class MainActivity : ComponentActivity() {
                                 maneuver = navigationManeuver?.current,
                                 distanceToManeuverMeters = navigationManeuver?.distanceToCurrentMeters,
                                 onStop = {
-                                    if (intercityStage == "to_origin_station") confirmReachedOriginStation()
-                                    else cancelNavigation()
+                                    when (intercityStage) {
+                                        "to_origin_station" -> confirmReachedOriginStation()
+                                        "to_origin_airport" -> confirmReachedOriginAirport()
+                                        else -> cancelNavigation()
+                                    }
                                 },
-                                arrivedActionLabel = if (intercityStage == "to_origin_station") "وصلت للمحطة" else "إنهاء",
+                                arrivedActionLabel = when (intercityStage) {
+                                    "to_origin_station" -> "وصلت للمحطة"
+                                    "to_origin_airport" -> "وصلت للمطار"
+                                    else -> "إنهاء"
+                                },
                                 modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
                                     .padding(top = 74.dp)
                             )
