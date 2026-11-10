@@ -22,7 +22,7 @@ The Android client displays the returned schedule and continues to use the exist
 ## Free-tier constraints
 
 Navo24's current Flight Schedules API reference states:
-- HKG ↔ FRA is the documented free demo route and works without a key.
+- HKG → FRA is the documented free demo route and works without a key.
 - Other flight-search routes require a `tmcp_` API key sent as `Authorization: Bearer ...`.
 - Airport, airline, and coverage reference lookups are free and do not require a key.
 - The schedule feed is refreshed about every three hours and provides schedules for the coming seven days.
