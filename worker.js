@@ -1580,10 +1580,8 @@ export default {
             return json({
               ok: true, provider: "OpenStreetMap airport data + OAG Flight Info",
               date, available: false, pricesAvailable: false,
-              code: "FLIGHT_PROVIDER_KEY_REQUIRED",
-              message: "محرك المطارات جاهز، لكن جداول الرحلات تحتاج مفتاح OAG المجاني. بعد إنشاء الحساب والاشتراك في الخطة المجانية، احفظ المفتاح في Cloudflare باسم OAG_SUBSCRIPTION_KEY.",
-              options: [], originAirport, destinationAirport
-            });
+              error: "محرك المطارات جاهز، لكن جداول الرحلات تحتاج مفتاح OAG. أنشئ حساب المطوّرين واشترك في Flight Info المجاني، ثم احفظ المفتاح في Cloudflare باسم OAG_SUBSCRIPTION_KEY."
+            }, 503);
           }
 
           const target = new URL("https://api.oag.com/flight-instances/");
@@ -1598,7 +1596,7 @@ export default {
           target.searchParams.set("Limit", "10");
           const response = await fetch(target.toString(), {
             headers: {
-              "Subscription-Key": oagKey,
+              "Subscription-Key": oagKey,\n              "Ocp-Apim-Subscription-Key": oagKey,
               "Accept": "application/json",
               "User-Agent": SEARCH_USER_AGENT
             },
@@ -1609,28 +1607,22 @@ export default {
             return json({
               ok: true, provider: "OAG Flight Info",
               date, available: false, pricesAvailable: false,
-              code: "FLIGHT_PROVIDER_KEY_INVALID",
-              message: "مفتاح OAG غير صالح أو غير مفعّل. تحقق من اشتراك Flight Info والمفتاح في لوحة OAG.",
-              options: [], originAirport, destinationAirport
-            });
+              error: "مفتاح OAG غير صالح أو غير مفعّل. تحقق من اشتراك Flight Info والمفتاح في لوحة OAG."
+            }, 503);
           }
           if (response.status === 403) {
             return json({
               ok: true, provider: "OAG Flight Info",
               date, available: false, pricesAvailable: false,
-              code: "FLIGHT_PROVIDER_ACCESS_DENIED",
-              message: "اشتراك OAG الحالي لا يملك صلاحية Flight Info. تأكد من تفعيل الخطة المجانية للواجهة المطلوبة.",
-              options: [], originAirport, destinationAirport
-            });
+              error: "اشتراك OAG الحالي لا يملك صلاحية Flight Info. تأكد من تفعيل الخطة المجانية للواجهة المطلوبة."
+            }, 503);
           }
           if (response.status === 429) {
             return json({
               ok: true, provider: "OAG Flight Info",
               date, available: false, pricesAvailable: false,
-              code: "FLIGHT_PROVIDER_QUOTA_REACHED",
-              message: "وصلت إلى حد استخدام OAG المتاح لهذه الفترة. النتائج المحفوظة تظل متاحة حتى انتهاء التخزين المؤقت.",
-              options: [], originAirport, destinationAirport
-            });
+              error: "وصلت إلى حد استخدام OAG المتاح لهذه الفترة. النتائج المحفوظة تظل متاحة حتى انتهاء التخزين المؤقت."
+            }, 503);
           }
           if (!response.ok) throw new Error("OAG Flight Info HTTP " + response.status);
           const flights = Array.isArray(payload.data) ? payload.data : [];
