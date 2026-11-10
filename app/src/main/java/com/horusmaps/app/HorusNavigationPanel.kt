@@ -103,7 +103,7 @@ fun HorusNavigationPanel(
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16834A))
                 ) { Text("وصلت إلى محطة الوصول — تابع إلى وجهتي") }
             }
-            if (selectedMode == "transit" || selectedMode == "flight") {
+            if (!waitingForTrainArrival && (selectedMode == "transit" || selectedMode == "flight")) {
                 if (selectedMode == "transit" && originStations.isNotEmpty()) {
                     Text("محطات الرحلة", color = Color(0xFF172B45), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     originStations.take(3).forEach { station ->
