@@ -461,9 +461,11 @@ object HorusMapSearchApi {
                 val from = origin.optString("iataCode")
                 val to = destination.optString("iataCode")
                 val departure = option.optString("departure")
+                val timezone = option.optString("timezone")
                 val arrival = option.optString("arrival")
+                val timeZoneLabel = timezone.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
                 add("الرحلة ${index + 1} • $flightNumber • $airline")
-                add("$from → $to • المغادرة: $departure • الوصول: ${arrival.ifBlank { "غير متاح" }}")
+                add("$from → $to • المغادرة: $departure$timeZoneLabel • الوصول: ${arrival.ifBlank { "غير متاح" }} UTC")
                 add("عدد التوقفات: ${option.optInt("stops")} • المصدر: ${option.optString("source", "Navo24")}")
                 val durationSeconds = option.optLong("durationSeconds", 0L)
                 if (durationSeconds > 0L) {
