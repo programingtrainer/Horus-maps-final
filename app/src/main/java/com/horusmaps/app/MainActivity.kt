@@ -367,23 +367,23 @@ class MainActivity : ComponentActivity() {
             runCatching { map.removeOnMapClickListener(old) }
         }
         val listener = org.maplibre.android.maps.MapLibreMap.OnMapClickListener { tappedPoint ->
-            val features = runCatching {
-                map.queryRenderedFeatures(map.projection.toScreenLocation(tappedPoint), null)
+            val features: List<com.mapbox.geojson.Feature> = runCatching {
+                map.queryRenderedFeatures(map.projection.toScreenLocation(tappedPoint))
             }.getOrDefault(emptyList())
-            val selected = features.firstNotNullOfOrNull { feature ->
+            val selected: HorusNavigationDestination? = features.firstNotNullOfOrNull { feature ->
                 val name = listOf("name", "name:ar", "name:en", "name_int")
                     .firstNotNullOfOrNull { key ->
-                        runCatching { feature.getStringProperty(key)?.trim()?.takeIf(String::isNotBlank) }.getOrNull()
+                        runCatching { feature.getStringProperty(key)?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
                     } ?: return@firstNotNullOfOrNull null
                 val properties = feature.properties() ?: return@firstNotNullOfOrNull null
                 val placeKeys = listOf(
                     "amenity", "shop", "healthcare", "railway", "public_transport",
                     "highway", "leisure", "tourism", "office", "craft", "aeroway", "place"
                 )
-                if (placeKeys.none(properties::has)) return@firstNotNullOfOrNull null
+                if (placeKeys.none { key -> properties.has(key) }) return@firstNotNullOfOrNull null
                 val address = listOf("addr:street", "addr:suburb", "addr:city", "addr:state", "addr:country")
                     .mapNotNull { key ->
-                        runCatching { feature.getStringProperty(key)?.trim()?.takeIf(String::isNotBlank) }.getOrNull()
+                        runCatching { feature.getStringProperty(key)?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
                     }.distinct().joinToString("، ")
                 HorusNavigationDestination(
                     name = name,
@@ -1147,7 +1147,7 @@ class MainActivity : ComponentActivity() {
                                 destination.longitude,
                                 selectedTravelMode
                             )
-                            val coordinates = org.json.JSONArray(result.geometryGeoJson)
+                            val coordinates = org.json.JSONObject(result.geometryGeoJson)
                                 .getJSONArray("coordinates")
                             val points = buildList {
                                 for (index in 0 until coordinates.length()) {
