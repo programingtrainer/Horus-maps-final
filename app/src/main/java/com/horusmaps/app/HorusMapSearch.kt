@@ -117,6 +117,14 @@ data class HorusNearbyPlace(
 
 data class HorusCountryInfo(val code: String, val name: String)
 
+data class HorusRouteResult(
+    val mode: String,
+    val distanceMeters: Int,
+    val durationSeconds: Int,
+    val geometryGeoJson: String,
+    val provider: String
+)
+
 object HorusMapSearchApi {
     private const val BASE_URL = "${BuildConfig.HORUS_API_BASE_URL}/v1/search"
     private const val USER_AGENT = "HorusMaps-Android/0.1"
@@ -275,6 +283,37 @@ object HorusMapSearchApi {
                 }
             }
         }
+
+    suspend fun route(
+        originLatitude: Double,
+        originLongitude: Double,
+        destinationLatitude: Double,
+        destinationLongitude: Double,
+        mode: String
+    ): HorusRouteResult = withContext(Dispatchers.IO) {
+        require(mode == "driving" || mode == "walking") {
+            "وسيلة الانتقال المطلوبة غير متاحة حاليًا."
+        }
+        val body = JSONObject()
+            .put("originLatitude", originLatitude)
+            .put("originLongitude", originLongitude)
+            .put("destinationLatitude", destinationLatitude)
+            .put("destinationLongitude", destinationLongitude)
+            .put("mode", mode)
+        val root = JSONObject(post("$BASE_URL/route", body))
+        if (!root.optBoolean("ok")) {
+            throw IllegalStateException(root.optString("error", "تعذر حساب الطريق."))
+        }
+        val geometry = root.optJSONObject("geometry")
+            ?: throw IllegalStateException("لم تصل بيانات مسار صالحة.")
+        HorusRouteResult(
+            mode = root.optString("mode", mode),
+            distanceMeters = root.optInt("distanceMeters", 0),
+            durationSeconds = root.optInt("durationSeconds", 0),
+            geometryGeoJson = geometry.toString(),
+            provider = root.optString("provider")
+        )
+    }
 
     suspend fun reverseCountry(latitude: Double, longitude: Double): HorusCountryInfo =
         withContext(Dispatchers.IO) {
