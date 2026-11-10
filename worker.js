@@ -1316,7 +1316,14 @@ export default {
           return json({ ok: false, error: "تعذر الوصول إلى بيانات القطارات حاليًا. حاول لاحقًا." }, 502);
         }
         const itineraries = payload.plan?.itineraries || [];
-        const options = itineraries.map((itinerary, index) => ({
+        // Do not present bus-only itineraries as train journeys. Keep walk/bus
+        // feeder legs only when the same itinerary contains an actual rail mode.
+        const railItineraries = itineraries.filter(itinerary =>
+          (itinerary.legs || []).some(leg =>
+            ["RAIL", "TRAIN", "SUBWAY", "METRO", "TRAM"].includes(String(leg.mode || "").toUpperCase())
+          )
+        );
+        const options = railItineraries.map((itinerary, index) => ({
           id: String(index + 1),
           startTime: itinerary.startTime || null,
           endTime: itinerary.endTime || null,
@@ -1338,7 +1345,7 @@ export default {
         return json({
           ok: true, provider: "Transitland", date, time,
           available: options.length > 0,
-          message: options.length ? null : "لم نعثر على رحلة قطار أو نقل عام متاحة بين النقطتين في بيانات المنطقة والتوقيت المحدد.",
+          message: options.length ? null : "لم نعثر على مسار يحتوي على قطار أو مترو بين النقطتين في بيانات المنطقة والتوقيت المحدد. قد لا تغطي قاعدة البيانات هذه المنطقة.",
           options
         });
       } catch (error) {
