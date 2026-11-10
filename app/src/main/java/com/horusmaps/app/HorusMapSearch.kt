@@ -136,6 +136,14 @@ data class HorusTransitStation(
     val distanceMeters: Int
 )
 
+data class HorusAirport(
+    val name: String,
+    val iataCode: String,
+    val latitude: Double,
+    val longitude: Double,
+    val distanceMeters: Int
+)
+
 data class HorusTransportSearchResult(
     val provider: String,
     val available: Boolean,
@@ -143,7 +151,9 @@ data class HorusTransportSearchResult(
     val options: List<String>,
     val geometryGeoJson: String? = null,
     val originStations: List<HorusTransitStation> = emptyList(),
-    val destinationStations: List<HorusTransitStation> = emptyList()
+    val destinationStations: List<HorusTransitStation> = emptyList(),
+    val originAirport: HorusAirport? = null,
+    val destinationAirport: HorusAirport? = null
 )
 
 data class HorusRouteResult(
@@ -409,12 +419,37 @@ object HorusMapSearchApi {
         val root = JSONObject(post("$BASE_URL/flights", body))
         if (!root.optBoolean("ok")) throw IllegalStateException(root.optString("error", "تعذر البحث عن الطيران."))
         val options = root.optJSONArray("options") ?: JSONArray()
+        fun parseAirport(value: JSONObject?): HorusAirport? {
+            if (value == null) return null
+            val latitude = value.optDouble("latitude", Double.NaN)
+            val longitude = value.optDouble("longitude", Double.NaN)
+            val code = value.optString("iataCode")
+            if (!latitude.isFinite() || !longitude.isFinite() || code.isBlank()) return null
+            return HorusAirport(name = value.optString("name", code), iataCode = code, latitude = latitude, longitude = longitude, distanceMeters = value.optInt("distanceMeters"))
+        }
+        val firstOption = options.optJSONObject(0)
+        val originAirport = parseAirport(firstOption?.optJSONObject("origin"))
+        val destinationAirport = parseAirport(firstOption?.optJSONObject("destination"))
         val lines = buildList {
+            originAirport?.let { airport ->
+                val distance = if (airport.distanceMeters >= 1000) String.format(Locale.US, "%.1f كم", airport.distanceMeters / 1000.0) else "${airport.distanceMeters} متر"
+                add("مطار المغادرة: ${airport.name} (${airport.iataCode}) • يبعد $distance عن موقعك")
+            }
+            destinationAirport?.let { airport ->
+                val distance = if (airport.distanceMeters >= 1000) String.format(Locale.US, "%.1f كم", airport.distanceMeters / 1000.0) else "${airport.distanceMeters} متر"
+                add("مطار الوصول: ${airport.name} (${airport.iataCode}) • يبعد $distance عن الوجهة")
+            }
             for (index in 0 until options.length()) {
                 val option = options.optJSONObject(index) ?: continue
                 val origin = option.optJSONObject("origin") ?: JSONObject()
                 val destination = option.optJSONObject("destination") ?: JSONObject()
+                val airDistance = option.optInt("airDistanceMeters")
+                val airDistanceLabel = if (airDistance > 0) String.format(Locale.US, "%.0f كم", airDistance / 1000.0) else "غير محددة"
+                val estimatedSeconds = option.optInt("estimatedFlightDurationSeconds")
+                val estimatedMinutes = (estimatedSeconds / 60).coerceAtLeast(1)
+                val estimatedLabel = if (estimatedMinutes >= 60) "${estimatedMinutes / 60} ساعة و ${estimatedMinutes % 60} دقيقة" else "$estimatedMinutes دقيقة"
                 add("الخيار ${index + 1} • ${option.optString("price")} ${option.optString("currency")} • ${option.optString("duration")} • ${option.optInt("stops")} توقف")
+                if (airDistance > 0) add("المسافة الجوية التقريبية: $airDistanceLabel • زمن طيران تقديري: $estimatedLabel")
                 add("${origin.optString("name")} (${origin.optString("iataCode")}) ← ${destination.optString("name")} (${destination.optString("iataCode")})")
                 val segments = option.optJSONArray("segments") ?: JSONArray()
                 for (segmentIndex in 0 until segments.length()) {
@@ -423,8 +458,14 @@ object HorusMapSearchApi {
                 }
             }
         }
-        HorusTransportSearchResult(root.optString("provider", "Amadeus"), root.optBoolean("available"),
-            root.optString("message").takeIf { it.isNotBlank() && it != "null" }, lines)
+        HorusTransportSearchResult(
+            provider = root.optString("provider", "Amadeus"),
+            available = root.optBoolean("available"),
+            message = root.optString("message").takeIf { it.isNotBlank() && it != "null" },
+            options = lines,
+            originAirport = originAirport,
+            destinationAirport = destinationAirport
+        )
     }
 
     suspend fun route(
