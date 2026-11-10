@@ -200,6 +200,89 @@ function normalizeOagFlight(flight, originAirport, destinationAirport) {
 }
 
 
+async function fetchTravelpayoutsPriceOffers(env, originIata, destinationIata, date) {
+  const token = String(env.TRAVELPAYOUTS_API_TOKEN || "").trim();
+  if (!token) {
+    return {
+      offers: [],
+      message: "أسعار التذاكر تحتاج مفتاح Travelpayouts Data API. التسجيل مجاني، لكن يجب تفعيل الوصول إلى Aviasales Data API أولًا."
+    };
+  }
+  try {
+    const cacheKey = [
+      "travelpayouts-flight-prices-v1",
+      originIata, destinationIata, date, "USD"
+    ].join(":");
+    const response = await cachedJson(env, cacheKey, 86400, async () => {
+      const target = new URL("https://api.travelpayouts.com/aviasales/v3/prices_for_dates");
+      target.searchParams.set("origin", originIata);
+      target.searchParams.set("destination", destinationIata);
+      target.searchParams.set("departure_at", date);
+      target.searchParams.set("one_way", "true");
+      target.searchParams.set("direct", "false");
+      target.searchParams.set("currency", "USD");
+      target.searchParams.set("limit", "30");
+      target.searchParams.set("page", "1");
+      const result = await fetch(target.toString(), {
+        headers: {
+          "X-Access-Token": token,
+          "Accept": "application/json",
+          "User-Agent": SEARCH_USER_AGENT
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+      const payload = await result.json().catch(() => ({}));
+      return json(payload, result.status);
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.success !== true || !Array.isArray(payload.data)) {
+      return {
+        offers: [],
+        message: response.status === 401
+          ? "مفتاح Travelpayouts غير صالح أو لا يملك صلاحية Aviasales Data API."
+          : "لم نتمكن من جلب الأسعار الاسترشادية من Travelpayouts حاليًا."
+      };
+    }
+    const offers = payload.data
+      .filter(item => item && Number.isFinite(Number(item.price)) && Number(item.price) > 0 && item.actual !== false)
+      .slice(0, 10)
+      .map(item => {
+        let bookingUrl = "";
+        if (typeof item.link === "string" && item.link.trim()) {
+          try {
+            bookingUrl = new URL(item.link, "https://www.aviasales.com").toString();
+          } catch (_) {}
+        }
+        return {
+          price: Number(item.price),
+          currency: String(item.currency || "USD").toUpperCase(),
+          airlineIata: String(item.airline || ""),
+          flightNumber: String(item.flight_number || ""),
+          departureAt: String(item.departure_at || ""),
+          returnAt: String(item.return_at || ""),
+          stops: Math.max(0, Number(item.transfers) || 0),
+          durationMinutes: Math.max(0, Number(item.duration_to || item.duration) || 0),
+          foundAt: String(item.found_at || ""),
+          expiresAt: String(item.expires_at || ""),
+          bookingUrl
+        };
+      });
+    return {
+      offers,
+      message: offers.length
+        ? "أسعار استرشادية مخزنة من عمليات بحث حديثة على Aviasales؛ قد تتغير ولا تؤكد توفر المقعد. تحقق من السعر النهائي قبل الدفع."
+        : "لا توجد أسعار حديثة مخزنة لهذا المسار والتاريخ. هذا لا يعني عدم وجود رحلات أو تذاكر."
+    };
+  } catch (error) {
+    console.warn("[HorusFlights] Travelpayouts price lookup failed", String(error?.message || error).slice(0, 140));
+    return {
+      offers: [],
+      message: "تعذر جلب الأسعار الاسترشادية الآن؛ جداول الرحلات تُعرض بشكل مستقل."
+    };
+  }
+}
+
+
 const SEARCH_OVERPASS_ENDPOINTS = [
   "https://overpass.private.coffee/api/interpreter",
   "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
@@ -1630,14 +1713,20 @@ export default {
           const options = flights.map(item => normalizeOagFlight(item, originAirport, destinationAirport))
             .filter(item => item.flightNumber && item.departure && item.arrival)
             .sort((a, b) => a.departure.localeCompare(b.departure));
+          const priceResult = await fetchTravelpayoutsPriceOffers(
+            env, originAirport.iataCode, destinationAirport.iataCode, date
+          );
           return json({
             ok: true,
-            provider: "OpenStreetMap airport data + OAG Flight Info (free tier)",
+            provider: "OpenStreetMap + OAG Flight Info",
+            priceProvider: "Travelpayouts Aviasales Data API",
             date,
             available: options.length > 0,
-            pricesAvailable: false,
+            pricesAvailable: priceResult.offers.length > 0,
+            priceMessage: priceResult.message,
+            priceOffers: priceResult.offers,
             message: options.length
-              ? "هذه مواعيد وجداول رحلات منشورة من OAG وليست عروض أسعار أو تأكيدًا لتوفر المقاعد. تحقق من شركة الطيران قبل السفر."
+              ? "هذه مواعيد وجداول رحلات منشورة من OAG. تأكد من شركة الطيران قبل السفر."
               : "لم يعثر OAG على رحلات ركاب مجدولة مباشرة بين المطارين في التاريخ المحدد.",
             originAirport,
             destinationAirport,
