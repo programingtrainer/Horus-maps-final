@@ -203,6 +203,105 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+async function fetchValhallaRoute(originLat, originLon, destinationLat, destinationLon, costing) {
+  const response = await fetch("https://valhalla1.openstreetmap.de/route", {
+    method: "POST",
+    headers: {
+      "User-Agent": SEARCH_USER_AGENT,
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    body: JSON.stringify({
+      locations: [
+        { lat: originLat, lon: originLon, type: "break" },
+        { lat: destinationLat, lon: destinationLon, type: "break" }
+      ],
+      costing,
+      units: "kilometers",
+      directions_options: { units: "kilometers" }
+    }),
+    signal: AbortSignal.timeout(18000)
+  });
+  if (!response.ok) throw new Error("Valhalla " + costing + " router HTTP " + response.status);
+  const payload = await response.json();
+  const leg = payload.trip?.legs?.[0];
+  if (!leg?.shape) throw new Error("Valhalla returned no " + costing + " route");
+
+  const decodePolyline6 = encoded => {
+    let index = 0, latitude = 0, longitude = 0;
+    const coordinates = [];
+    const readValue = () => {
+      let result = 0, shift = 0, byte;
+      do {
+        if (index >= encoded.length) throw new Error("Invalid route geometry");
+        byte = encoded.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      return (result & 1) ? ~(result >> 1) : (result >> 1);
+    };
+    while (index < encoded.length) {
+      latitude += readValue();
+      longitude += readValue();
+      coordinates.push([longitude / 1e6, latitude / 1e6]);
+    }
+    return coordinates;
+  };
+
+  const geometry = { type: "LineString", coordinates: decodePolyline6(leg.shape) };
+  const cumulativeDistances = [0];
+  for (let index = 1; index < geometry.coordinates.length; index++) {
+    const left = geometry.coordinates[index - 1];
+    const right = geometry.coordinates[index];
+    cumulativeDistances.push(
+      cumulativeDistances[index - 1] +
+      haversineMeters(left[1], left[0], right[1], right[0])
+    );
+  }
+
+  const valhallaTypes = {
+    1: ["depart", ""], 2: ["depart", "right"], 3: ["depart", "left"],
+    4: ["arrive", ""], 5: ["arrive", "right"], 6: ["arrive", "left"],
+    7: ["continue", ""], 8: ["continue", ""], 9: ["turn", "slight_right"],
+    10: ["turn", "right"], 11: ["turn", "sharp_right"], 12: ["turn", "uturn"],
+    13: ["turn", "uturn"], 14: ["turn", "sharp_left"], 15: ["turn", "left"],
+    16: ["turn", "slight_left"], 17: ["ramp", "straight"], 18: ["ramp", "right"],
+    19: ["ramp", "left"], 20: ["exit", "right"], 21: ["exit", "left"],
+    22: ["continue", "straight"], 23: ["continue", "right"], 24: ["continue", "left"],
+    25: ["merge", ""], 26: ["roundabout", "enter"], 27: ["roundabout", "exit"],
+    28: ["ferry", "enter"], 29: ["ferry", "exit"]
+  };
+  const steps = (leg.maneuvers || []).map(maneuver => {
+    const shapeIndex = Math.max(0, Math.min(Number(maneuver.begin_shape_index) || 0, geometry.coordinates.length - 1));
+    const [type, modifier] = valhallaTypes[Number(maneuver.type)] || ["continue", ""];
+    const coordinate = geometry.coordinates[shapeIndex] || [NaN, NaN];
+    return {
+      type,
+      modifier,
+      name: Array.isArray(maneuver.street_names) ? maneuver.street_names.join(" / ") : "",
+      instruction: String(maneuver.instruction || ""),
+      distanceFromStartMeters: Math.round(cumulativeDistances[shapeIndex] || 0),
+      distanceMeters: Math.round((Number(maneuver.length) || 0) * 1000),
+      durationSeconds: Math.round(Number(maneuver.time) || 0),
+      longitude: Number(coordinate[0]),
+      latitude: Number(coordinate[1])
+    };
+  }).filter(step => Number.isFinite(step.latitude) && Number.isFinite(step.longitude));
+
+  const distanceMeters = Number(leg.summary?.length) * 1000;
+  const durationSeconds = Number(leg.summary?.time);
+  if (!Number.isFinite(distanceMeters) || !Number.isFinite(durationSeconds) || geometry.coordinates.length < 2) {
+    throw new Error("Valhalla returned incomplete " + costing + " route data");
+  }
+  return {
+    distanceMeters,
+    durationSeconds,
+    geometry,
+    steps,
+    provider: "Valhalla"
+  };
+}
+
 async function cachedJson(env, cacheKey, ttlSeconds, producer) {
   const key = "horus:search-cache:v1:" + cacheKey;
   if (env.HORUS_MAPS_CONFIG) {
@@ -1142,156 +1241,73 @@ export default {
           }, 422);
         }
 
-        let distanceMeters = 0;
-        let durationSeconds = 0;
-        let geometry = null;
-        let steps = [];
-        let provider = "";
+        let routeData;
         if (mode === "driving") {
-          const target = new URL(
-            "https://router.project-osrm.org/route/v1/driving/" +
-            originLon + "," + originLat + ";" + destinationLon + "," + destinationLat
-          );
-          target.searchParams.set("overview", "full");
-          target.searchParams.set("geometries", "geojson");
-          target.searchParams.set("steps", "true");
-          const response = await fetch(target.toString(), {
-            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
-            signal: AbortSignal.timeout(15000)
-          });
-          if (!response.ok) throw new Error("Driving router HTTP " + response.status);
-          const payload = await response.json();
-          const route = payload.routes?.[0];
-          if (payload.code !== "Ok" || !route?.geometry?.coordinates?.length) {
-            return json({ ok: false, error: "لم نعثر على طريق مناسب بالسيارة بين النقطتين." }, 404);
-          }
-          distanceMeters = Number(route.distance);
-          durationSeconds = Number(route.duration);
-          geometry = route.geometry;
-          let cumulativeMeters = 0;
-          steps = (route.legs?.[0]?.steps || []).map(step => {
-            const maneuver = step.maneuver || {};
-            const location = maneuver.location || [];
-            const normalized = {
-              type: String(maneuver.type || "continue"),
-              modifier: String(maneuver.modifier || ""),
-              name: String(step.name || ""),
-              distanceFromStartMeters: Math.round(cumulativeMeters),
-              distanceMeters: Math.round(Number(step.distance) || 0),
-              durationSeconds: Math.round(Number(step.duration) || 0),
-              longitude: Number(location[0]),
-              latitude: Number(location[1])
-            };
-            cumulativeMeters += Number(step.distance) || 0;
-            return normalized;
-          }).filter(step => Number.isFinite(step.latitude) && Number.isFinite(step.longitude));
-          provider = "OSRM";
-        } else {
-          const target = new URL("https://valhalla1.openstreetmap.de/route");
-          const requestBody = {
-            locations: [
-              { lat: originLat, lon: originLon, type: "break" },
-              { lat: destinationLat, lon: destinationLon, type: "break" }
-            ],
-            costing: "pedestrian",
-            units: "kilometers",
-            directions_options: { units: "kilometers" }
-          };
-          const response = await fetch(target.toString(), {
-            method: "POST",
-            headers: {
-              "User-Agent": SEARCH_USER_AGENT,
-              "Content-Type": "application/json",
-              "Accept": "application/json"
-            },
-            body: JSON.stringify(requestBody),
-            signal: AbortSignal.timeout(15000)
-          });
-          if (!response.ok) throw new Error("Walking router HTTP " + response.status);
-          const payload = await response.json();
-          const trip = payload.trip;
-          const leg = trip?.legs?.[0];
-          if (!leg?.shape) {
-            return json({ ok: false, error: "لم نعثر على مسار مشي مناسب بين النقطتين." }, 404);
-          }
-          const decodePolyline6 = encoded => {
-            let index = 0, latitude = 0, longitude = 0;
-            const coordinates = [];
-            const readValue = () => {
-              let result = 0, shift = 0, byte;
-              do {
-                if (index >= encoded.length) throw new Error("Invalid walking route geometry");
-                byte = encoded.charCodeAt(index++) - 63;
-                result |= (byte & 0x1f) << shift;
-                shift += 5;
-              } while (byte >= 0x20);
-              return (result & 1) ? ~(result >> 1) : (result >> 1);
-            };
-            while (index < encoded.length) {
-              latitude += readValue();
-              longitude += readValue();
-              coordinates.push([longitude / 1e6, latitude / 1e6]);
+          // OSRM is the primary road router. If it has no route or is temporarily
+          // unavailable, retry with Valhalla's global auto profile before failing.
+          try {
+            const target = new URL(
+              "https://router.project-osrm.org/route/v1/driving/" +
+              originLon + "," + originLat + ";" + destinationLon + "," + destinationLat
+            );
+            target.searchParams.set("overview", "full");
+            target.searchParams.set("geometries", "geojson");
+            target.searchParams.set("steps", "true");
+            const response = await fetch(target.toString(), {
+              headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+              signal: AbortSignal.timeout(12000)
+            });
+            if (!response.ok) throw new Error("OSRM HTTP " + response.status);
+            const payload = await response.json();
+            const route = payload.routes?.[0];
+            if (payload.code !== "Ok" || !route?.geometry?.coordinates?.length) {
+              throw new Error("OSRM found no drivable route");
             }
-            return coordinates;
-          };
-          distanceMeters = Number(leg.summary?.length) * 1000;
-          durationSeconds = Number(leg.summary?.time);
-          geometry = { type: "LineString", coordinates: decodePolyline6(leg.shape) };
-          const routeCoordinates = geometry.coordinates;
-          const cumulativeDistances = [0];
-          const distanceBetween = (left, right) => {
-            const radians = value => value * Math.PI / 180;
-            const dLat = radians(right[1] - left[1]);
-            const dLon = radians(right[0] - left[0]);
-            const a = Math.sin(dLat / 2) ** 2 +
-              Math.cos(radians(left[1])) * Math.cos(radians(right[1])) *
-              Math.sin(dLon / 2) ** 2;
-            return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-          };
-          for (let index = 1; index < routeCoordinates.length; index++) {
-            cumulativeDistances.push(cumulativeDistances[index - 1] + distanceBetween(routeCoordinates[index - 1], routeCoordinates[index]));
-          }
-          const valhallaTypes = {
-            1: ["depart", ""], 2: ["depart", "right"], 3: ["depart", "left"],
-            4: ["arrive", ""], 5: ["arrive", "right"], 6: ["arrive", "left"],
-            7: ["continue", ""], 8: ["continue", ""], 9: ["turn", "slight_right"],
-            10: ["turn", "right"], 11: ["turn", "sharp_right"], 12: ["turn", "uturn"],
-            13: ["turn", "uturn"], 14: ["turn", "sharp_left"], 15: ["turn", "left"],
-            16: ["turn", "slight_left"], 17: ["ramp", "straight"], 18: ["ramp", "right"],
-            19: ["ramp", "left"], 20: ["exit", "right"], 21: ["exit", "left"],
-            22: ["continue", "straight"], 23: ["continue", "right"], 24: ["continue", "left"],
-            25: ["merge", ""], 26: ["roundabout", "enter"], 27: ["roundabout", "exit"],
-            28: ["ferry", "enter"], 29: ["ferry", "exit"]
-          };
-          steps = (leg.maneuvers || []).map(maneuver => {
-            const shapeIndex = Math.max(0, Math.min(Number(maneuver.begin_shape_index) || 0, routeCoordinates.length - 1));
-            const [type, modifier] = valhallaTypes[Number(maneuver.type)] || ["continue", ""];
-            const coordinate = routeCoordinates[shapeIndex] || [NaN, NaN];
-            return {
-              type,
-              modifier,
-              name: Array.isArray(maneuver.street_names) ? maneuver.street_names.join(" / ") : "",
-              instruction: String(maneuver.instruction || ""),
-              distanceFromStartMeters: Math.round(cumulativeDistances[shapeIndex] || 0),
-              distanceMeters: Math.round((Number(maneuver.length) || 0) * 1000),
-              durationSeconds: Math.round(Number(maneuver.time) || 0),
-              longitude: Number(coordinate[0]),
-              latitude: Number(coordinate[1])
+            let cumulativeMeters = 0;
+            const steps = (route.legs?.[0]?.steps || []).map(step => {
+              const maneuver = step.maneuver || {};
+              const location = maneuver.location || [];
+              const normalized = {
+                type: String(maneuver.type || "continue"),
+                modifier: String(maneuver.modifier || ""),
+                name: String(step.name || ""),
+                distanceFromStartMeters: Math.round(cumulativeMeters),
+                distanceMeters: Math.round(Number(step.distance) || 0),
+                durationSeconds: Math.round(Number(step.duration) || 0),
+                longitude: Number(location[0]),
+                latitude: Number(location[1])
+              };
+              cumulativeMeters += Number(step.distance) || 0;
+              return normalized;
+            }).filter(step => Number.isFinite(step.latitude) && Number.isFinite(step.longitude));
+            routeData = {
+              distanceMeters: Number(route.distance),
+              durationSeconds: Number(route.duration),
+              geometry: route.geometry,
+              steps,
+              provider: "OSRM"
             };
-          }).filter(step => Number.isFinite(step.latitude) && Number.isFinite(step.longitude));
-          provider = "Valhalla";
+          } catch (osrmError) {
+            console.warn("[HorusRoute] OSRM failed; trying Valhalla auto", String(osrmError?.message || osrmError).slice(0, 140));
+            routeData = await fetchValhallaRoute(originLat, originLon, destinationLat, destinationLon, "auto");
+          }
+        } else {
+          routeData = await fetchValhallaRoute(originLat, originLon, destinationLat, destinationLon, "pedestrian");
         }
-        if (!Number.isFinite(distanceMeters) || !Number.isFinite(durationSeconds) || !geometry?.coordinates?.length) {
+
+        if (!Number.isFinite(routeData.distanceMeters) ||
+            !Number.isFinite(routeData.durationSeconds) ||
+            !routeData.geometry?.coordinates?.length) {
           throw new Error("Router returned incomplete route data");
         }
         return json({
           ok: true,
           mode,
-          distanceMeters: Math.round(distanceMeters),
-          durationSeconds: Math.round(durationSeconds),
-          geometry,
-          steps,
-          provider
+          distanceMeters: Math.round(routeData.distanceMeters),
+          durationSeconds: Math.round(routeData.durationSeconds),
+          geometry: routeData.geometry,
+          steps: routeData.steps,
+          provider: routeData.provider
         });
       } catch (error) {
         console.error("[HorusRoute] Route request failed", String(error?.message || error).slice(0, 180));
