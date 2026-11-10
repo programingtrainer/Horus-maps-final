@@ -2,7 +2,7 @@ name: Android build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, feature/advanced-search-navigation ]
   pull_request:
     branches: [ main ]
 
