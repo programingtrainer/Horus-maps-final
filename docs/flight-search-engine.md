@@ -62,6 +62,8 @@ The real-time Aviasales Flight Search API has a 50,000 monthly active user eligi
 
 ## Sources and licensing
 
+- Ignav fare API, request format and booking handoff: https://ignav.com/docs
+- Ignav pricing and one-time free allowance: https://ignav.com/pricing
 - OAG Developer Portal and free-tier details: https://developers.oag.com/
 - OAG Flight Explorer guide: https://developers.oag.com/guides/flight-explorer
 - OAG account creation guide: https://knowledge.oag.com/docs/flight-info-api-creating-an-account
