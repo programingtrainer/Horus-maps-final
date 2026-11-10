@@ -148,14 +148,20 @@ for (const [canonical, aliases] of [
 ]) for (const alias of aliases) GEOGRAPHIC_ALIASES.set(normalizeSearchText(alias), canonical);
 
 function geographicQueryVariants(query) {
-  const normalized = normalizeSearchText(query);
+  const raw = String(query || "").trim();
+  const normalized = normalizeSearchText(raw);
   let canonical = GEOGRAPHIC_ALIASES.get(normalized);
   if (!canonical && normalized.length >= 5) {
     for (const [alias, country] of GEOGRAPHIC_ALIASES) {
       if (alias.length >= 5 && levenshteinDistance(normalized, alias) <= 1) { canonical = country; break; }
     }
   }
-  return [...new Set((canonical ? [canonical, query] : [query]).map(value => String(value || "").trim()).filter(Boolean))];
+  // Keep the original phrase first, then try the place name without a generic
+  // Arabic/English feature prefix. This helps village, lane, school and street
+  // searches where the provider indexes the proper name separately.
+  const stripped = raw.replace(/^(?:(?:قرية|القرية|نجع|عزبة|شارع|طريق|حي|حارة|مدرسة|جامعة|village|street|road|school|university)\\s+)/iu, "").trim();
+  const candidates = canonical ? [canonical, raw, stripped] : [raw, stripped];
+  return [...new Set(candidates.map(value => String(value || "").trim()).filter(value => value.length >= 2))].slice(0, 4);
 }
 
 function levenshteinDistance(left, right) {
@@ -958,112 +964,100 @@ export default {
       const latitude = validCoordinate(url.searchParams.get("lat"), -90, 90);
       const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
       const language = String(url.searchParams.get("lang") || "ar,en").slice(0, 32);
-      const cacheKey = "geocode:v2:" + queryVariants.join("|").toLocaleLowerCase() + ":" + language + ":" +
+      const cacheKey = "geocode:v3:" + queryVariants.join("|").toLocaleLowerCase() + ":" + language + ":" +
         (latitude === null ? "" : latitude.toFixed(2)) + ":" + (longitude === null ? "" : longitude.toFixed(2));
       return cachedJson(env, cacheKey, 86400, async () => {
-        const target = new URL("https://nominatim.openstreetmap.org/search");
-        target.searchParams.set("q", queryVariants[0]);
-        target.searchParams.set("format", "geojson");
-        target.searchParams.set("polygon_geojson", "1");
-        target.searchParams.set("polygon_threshold", "0.003");
-        target.searchParams.set("addressdetails", "1");
-        target.searchParams.set("limit", "8");
-        target.searchParams.set("accept-language", language);
+        const nominatimTarget = new URL("https://nominatim.openstreetmap.org/search");
+        nominatimTarget.searchParams.set("q", queryVariants[0]);
+        nominatimTarget.searchParams.set("format", "geojson");
+        nominatimTarget.searchParams.set("polygon_geojson", "1");
+        nominatimTarget.searchParams.set("polygon_threshold", "0.003");
+        nominatimTarget.searchParams.set("addressdetails", "1");
+        nominatimTarget.searchParams.set("namedetails", "1");
+        nominatimTarget.searchParams.set("extratags", "1");
+        nominatimTarget.searchParams.set("limit", "12");
+        nominatimTarget.searchParams.set("accept-language", language);
         if (latitude !== null && longitude !== null) {
           const delta = 3;
-          target.searchParams.set("viewbox", [
+          nominatimTarget.searchParams.set("viewbox", [
             longitude - delta, latitude + delta, longitude + delta, latitude - delta
           ].join(","));
         }
-        let payload = null;
+
+        let nominatimPayload = null;
         try {
-          const response = await fetchNominatim(target.toString(), {
+          const response = await fetchNominatim(nominatimTarget.toString(), {
+            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+            signal: AbortSignal.timeout(9000)
+          });
+          if (response.ok) nominatimPayload = await response.json();
+          else console.warn("[HorusSearch] Nominatim returned HTTP", response.status);
+        } catch (error) {
+          console.warn("[HorusSearch] Nominatim unavailable", String(error?.message || error).slice(0, 120));
+        }
+
+        // Query Photon independently even when Nominatim returned results. The
+        // providers have different ranking/index coverage, especially for
+        // named streets, schools and small settlements.
+        const photonTasks = queryVariants.slice(0, 3).map(async variant => {
+          const target = new URL("https://photon.komoot.io/api/");
+          target.searchParams.set("q", variant);
+          target.searchParams.set("limit", "10");
+          target.searchParams.set("lang", language.split(",")[0] || "en");
+          if (latitude !== null && longitude !== null) {
+            target.searchParams.set("lat", String(latitude));
+            target.searchParams.set("lon", String(longitude));
+          }
+          const response = await fetch(target.toString(), {
             headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
             signal: AbortSignal.timeout(8000)
           });
-          if (response.ok) payload = await response.json();
-          else console.warn("[HorusSearch] Nominatim returned HTTP", response.status);
-        } catch (error) {
-          console.warn("[HorusSearch] Nominatim unavailable; trying fallback", String(error?.message || error).slice(0, 120));
+          if (!response.ok) return [];
+          const data = await response.json();
+          return Array.isArray(data.features) ? data.features : [];
+        });
+        const photonResults = await Promise.allSettled(photonTasks);
+        const photonFeatures = photonResults.flatMap(result => result.status === "fulfilled" ? result.value : []);
+        const nominatimFeatures = Array.isArray(nominatimPayload?.features) ? nominatimPayload.features : [];
+        const merged = [];
+        const seen = new Set();
+        for (const feature of [...nominatimFeatures, ...photonFeatures]) {
+          const properties = feature?.properties || {};
+          const coordinates = feature?.geometry?.coordinates;
+          if (!Array.isArray(coordinates) || coordinates.length < 2) continue;
+          const longitudeValue = Number(coordinates[0]);
+          const latitudeValue = Number(coordinates[1]);
+          if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue) ||
+              latitudeValue < -90 || latitudeValue > 90 || longitudeValue < -180 || longitudeValue > 180) continue;
+          const osmKey = properties.osm_type && properties.osm_id
+            ? String(properties.osm_type) + "/" + String(properties.osm_id)
+            : "";
+          const normalizedName = normalizeSearchText(properties.name || properties.street || properties.display_name || "");
+          const locationKey = latitudeValue.toFixed(5) + ":" + longitudeValue.toFixed(5);
+          const key = osmKey || (normalizedName + ":" + locationKey);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const displayName = properties.display_name || [
+            properties.name, properties.street, properties.housenumber,
+            properties.city || properties.town || properties.village,
+            properties.state, properties.country
+          ].filter(Boolean).join(", ");
+          merged.push({
+            ...feature,
+            properties: {
+              ...properties,
+              name: properties.name || properties.street || properties.city || properties.village || properties.country || rawQuery,
+              display_name: displayName || rawQuery,
+              type: properties.type || properties.osm_value || properties.osm_key || properties.layer || "place",
+              source: properties.osm_type ? "nominatim" : "photon"
+            }
+          });
         }
 
-        // Nominatim may throttle or return no matches for some names. Photon is
-        // a second independent OSM geocoder so ordinary places remain searchable.
-        if (!payload || !Array.isArray(payload.features) || payload.features.length === 0) {
-          for (const variant of queryVariants) {
-            const fallback = new URL("https://photon.komoot.io/api/");
-            fallback.searchParams.set("q", variant);
-            fallback.searchParams.set("limit", "8");
-            fallback.searchParams.set("lang", language.split(",")[0] || "en");
-            if (latitude !== null && longitude !== null) {
-              fallback.searchParams.set("lat", String(latitude));
-              fallback.searchParams.set("lon", String(longitude));
-            }
-            const fallbackResponse = await fetch(fallback.toString(), {
-              headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
-              signal: AbortSignal.timeout(8000)
-            });
-            if (fallbackResponse.ok) {
-              payload = await fallbackResponse.json();
-              if (Array.isArray(payload.features) && payload.features.length > 0) break;
-            }
-          }
-          if (payload && Array.isArray(payload.features)) {
-              payload.features = payload.features.map(feature => {
-                const properties = feature.properties || {};
-                const displayName = [
-                  properties.name,
-                  properties.street,
-                  properties.housenumber,
-                  properties.city || properties.town || properties.village,
-                  properties.state,
-                  properties.country
-                ].filter(Boolean).join(", ");
-                return {
-                  ...feature,
-                  properties: {
-                    ...properties,
-                    name: properties.name || properties.street || properties.city || properties.country || query,
-                    display_name: properties.display_name || displayName || query,
-                    type: properties.type || properties.osm_value || "place"
-                  }
-                };
-            });
-          }
-        }
-
-        if (!payload || !Array.isArray(payload.features)) {
+        if (merged.length === 0 && !nominatimPayload && photonResults.every(result => result.status === "rejected")) {
           return json({ ok: false, error: "تعذر الاتصال بخدمات البحث الجغرافي الآن." }, 503);
         }
-        return json({ ok: true, ...payload });
-      });
-    }
-
-    if (url.pathname === "/v1/search/reverse" && request.method === "GET") {
-      const latitude = validCoordinate(url.searchParams.get("lat"), -90, 90);
-      const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
-      if (latitude === null || longitude === null) return json({ ok: false, error: "إحداثيات الموقع غير صالحة." }, 400);
-      const cacheKey = "reverse:v1:" + latitude.toFixed(3) + ":" + longitude.toFixed(3);
-      return cachedJson(env, cacheKey, 86400, async () => {
-        const target = new URL("https://nominatim.openstreetmap.org/reverse");
-        target.searchParams.set("lat", String(latitude));
-        target.searchParams.set("lon", String(longitude));
-        target.searchParams.set("format", "jsonv2");
-        target.searchParams.set("zoom", "3");
-        target.searchParams.set("addressdetails", "1");
-        target.searchParams.set("accept-language", "ar,en");
-        const response = await fetchNominatim(target.toString(), {
-          headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
-          signal: AbortSignal.timeout(15000)
-        });
-        if (!response.ok) return json({ ok: false, error: "تعذر تحديد الدولة من موقعك." }, response.status);
-        const payload = await response.json();
-        return json({
-          ok: true,
-          countryCode: String(payload.address?.country_code || "").toLowerCase(),
-          country: String(payload.address?.country || ""),
-          address: payload.address || {}
-        });
+        return json({ ok: true, type: "FeatureCollection", features: merged.slice(0, 24) });
       });
     }
 
