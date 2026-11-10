@@ -548,6 +548,25 @@ async function queryPhotonGlobal(category, query, centerLat, centerLon) {
     return payload.features;
   }));
 
+  // Brand searches can be missing from a strict OSM category even when the
+  // place is indexed by Photon. Add one unfiltered text lookup as a fallback.
+  if (searchText) {
+    attempts.push((async () => {
+      const target = new URL("https://photon.komoot.io/api/");
+      target.searchParams.set("q", searchText);
+      target.searchParams.set("limit", "50");
+      target.searchParams.set("lang", "en");
+      const response = await fetch(target.toString(), {
+        headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+        signal: AbortSignal.timeout(8000)
+      });
+      if (!response.ok) throw new Error("Photon global text fallback HTTP " + response.status);
+      const payload = await response.json();
+      if (!Array.isArray(payload.features)) throw new Error("Photon global text fallback returned invalid data");
+      return payload.features;
+    })());
+  }
+
   const settled = await Promise.allSettled(attempts);
   const seen = new Set();
   const elements = [];
