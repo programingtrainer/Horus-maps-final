@@ -199,6 +199,72 @@ function normalizeOagFlight(flight, originAirport, destinationAirport) {
   };
 }
 
+function normalizeIgnavFlight(itinerary, originAirport, destinationAirport) {
+  const outbound = itinerary?.outbound || {};
+  const segments = Array.isArray(outbound.segments) ? outbound.segments : [];
+  if (!segments.length) return null;
+  const first = segments[0] || {};
+  const last = segments[segments.length - 1] || {};
+  const durationMinutes = Number(outbound.duration_minutes) ||
+    segments.reduce((total, segment) => total + (Number(segment.duration_minutes) || 0), 0);
+  const flightNumber = [
+    String(first.marketing_carrier_code || ""),
+    String(first.flight_number || "")
+  ].join("").trim();
+  return {
+    flightNumber,
+    airline: String(outbound.carrier || first.operating_carrier_name || first.marketing_carrier_code || "شركة طيران"),
+    airlineIata: String(first.marketing_carrier_code || ""),
+    origin: {
+      iataCode: String(first.departure_airport || originAirport.iataCode),
+      name: originAirport.name,
+      latitude: originAirport.latitude,
+      longitude: originAirport.longitude
+    },
+    destination: {
+      iataCode: String(last.arrival_airport || destinationAirport.iataCode),
+      name: destinationAirport.name,
+      latitude: destinationAirport.latitude,
+      longitude: destinationAirport.longitude
+    },
+    departure: String(first.departure_time_local || first.departure_time_utc || ""),
+    departureUtc: String(first.departure_time_utc || ""),
+    arrival: String(last.arrival_time_local || last.arrival_time_utc || ""),
+    durationSeconds: Math.max(0, Math.round(durationMinutes * 60)),
+    timezone: String(first.departure_timezone || ""),
+    stops: Math.max(0, segments.length - 1),
+    via: segments.slice(0, -1).map(segment => String(segment.arrival_airport || "")).filter(Boolean),
+    status: String(itinerary?.price?.status || "سعر مسترجع من Ignav"),
+    updatedAt: String(itinerary?.observed_at || ""),
+    source: "Ignav",
+    cargo: false,
+    ignavId: String(itinerary?.ignav_id || "")
+  };
+}
+
+function normalizeIgnavPriceOffer(itinerary) {
+  const outbound = itinerary?.outbound || {};
+  const segments = Array.isArray(outbound.segments) ? outbound.segments : [];
+  const first = segments[0] || {};
+  const price = Number(itinerary?.price?.amount);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  return {
+    price,
+    currency: String(itinerary.price?.currency || "SAR").toUpperCase(),
+    airlineIata: String(first.marketing_carrier_code || ""),
+    flightNumber: [
+      String(first.marketing_carrier_code || ""),
+      String(first.flight_number || "")
+    ].join("").trim(),
+    departureAt: String(first.departure_time_local || first.departure_time_utc || ""),
+    stops: Math.max(0, segments.length - 1),
+    durationMinutes: Math.max(0, Number(outbound.duration_minutes) || 0),
+    foundAt: String(itinerary?.observed_at || ""),
+    bookingUrl: "",
+    ignavId: String(itinerary?.ignav_id || "")
+  };
+}
+
 
 async function fetchTravelpayoutsPriceOffers(env, originIata, destinationIata, date) {
   const token = String(env.TRAVELPAYOUTS_API_TOKEN || "").trim();
@@ -1628,12 +1694,14 @@ export default {
           return json({ ok: false, error: "حدد تاريخ سفر صحيحًا اليوم أو في المستقبل." }, 400);
         }
 
+        const ignavConfigured = Boolean(String(env.IGNAV_API_KEY || "").trim());
         const cacheKey = [
-          "flight-schedules-oag-v1",
+          "flight-search-v2",
           originLat.toFixed(2), originLon.toFixed(2),
-          destinationLat.toFixed(2), destinationLon.toFixed(2), date
+          destinationLat.toFixed(2), destinationLon.toFixed(2), date,
+          ignavConfigured ? "ignav-sa" : "legacy"
         ].join(":");
-        return await cachedJson(env, cacheKey, 10800, async () => {
+        return await cachedJson(env, cacheKey, ignavConfigured ? 1800 : 10800, async () => {
           const [origins, destinations] = await Promise.all([
             findNearbyOpenAirports(originLat, originLon),
             findNearbyOpenAirports(destinationLat, destinationLon)
@@ -1655,6 +1723,67 @@ export default {
               date, available: false, pricesAvailable: false,
               message: "لم نعثر على مطارين مختلفين مناسبين للمسار المطلوب.",
               options: [], originAirport, destinationAirport: null
+            });
+          }
+
+          const ignavKey = String(env.IGNAV_API_KEY || "").trim();
+          if (ignavKey) {
+            const response = await fetch("https://ignav.com/api/fares/one-way", {
+              method: "POST",
+              headers: {
+                "X-Api-Key": ignavKey,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": SEARCH_USER_AGENT
+              },
+              body: JSON.stringify({
+                origin: originAirport.iataCode,
+                destination: destinationAirport.iataCode,
+                departure_date: date,
+                adults: 1,
+                cabin_class: "economy",
+                market: "SA",
+                allow_self_transfer: false
+              }),
+              signal: AbortSignal.timeout(20000)
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+              const message = response.status === 401 || response.status === 403
+                ? "مفتاح Ignav غير صالح أو لا يملك صلاحية البحث. راجع المفتاح في Cloudflare Preview."
+                : response.status === 429
+                  ? "تم استهلاك حد الطلبات المتاح من Ignav مؤقتًا. ستظل النتائج المخزنة متاحة حتى انتهاء التخزين المؤقت."
+                  : "تعذر الحصول على عروض الطيران من Ignav حاليًا.";
+              return json({ ok: false, provider: "Ignav", code: "IGNAV_REQUEST_FAILED", error: message }, 503);
+            }
+            const itineraries = Array.isArray(payload.itineraries) ? payload.itineraries : [];
+            const normalized = itineraries
+              .map(item => normalizeIgnavFlight(item, originAirport, destinationAirport))
+              .filter(item => item && item.flightNumber && item.departure && item.arrival)
+              .sort((a, b) => a.departure.localeCompare(b.departure));
+            const priceOffers = itineraries
+              .map(normalizeIgnavPriceOffer)
+              .filter(Boolean)
+              .sort((a, b) => a.price - b.price)
+              .slice(0, 10);
+            return json({
+              ok: true,
+              provider: "OpenStreetMap + Ignav",
+              priceProvider: "Ignav",
+              date,
+              available: normalized.length > 0,
+              pricesAvailable: priceOffers.length > 0,
+              priceMessage: priceOffers.length
+                ? "أسعار من Ignav؛ قد يعاد استخدام نتيجة البحث لمدة تصل إلى 30 دقيقة. قد تتغير الأسعار والتوافر، لذا تحقق من السعر النهائي قبل الدفع."
+                : "لم تتوفر أسعار لهذا المسار والتاريخ من Ignav.",
+              message: normalized.length
+                ? "عروض الرحلات والأسعار من Ignav. قد تشمل الرحلات المباشرة أو رحلات التوقف وفق النتائج المتاحة."
+                : "لم يعثر Ignav على عروض لهذا المسار والتاريخ. جرّب تاريخًا آخر أو مطارًا مختلفًا.",
+              originAirport,
+              destinationAirport,
+              options: normalized,
+              priceOffers,
+              observedAt: String(payload.observed_at || "")
             });
           }
 
@@ -1741,6 +1870,71 @@ export default {
           code: "FLIGHT_SEARCH_FAILED",
           error: error?.message || "تعذر البحث عن رحلات الطيران الآن."
         }, 503);
+      }
+    }
+
+    if (url.pathname === "/v1/search/flights/booking-links" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const ignavId = String(body.ignavId || "").trim().slice(0, 120);
+        if (!/^[A-Za-z0-9_-]{12,120}$/.test(ignavId)) {
+          return json({ ok: false, error: "معرّف عرض الطيران غير صالح." }, 400);
+        }
+        const ignavKey = String(env.IGNAV_API_KEY || "").trim();
+        if (!ignavKey) {
+          return json({ ok: false, error: "روابط الحجز تحتاج إعداد مفتاح Ignav على خادم Preview." }, 503);
+        }
+        return await cachedJson(env, "ignav-booking-links-v1:" + ignavId, 300, async () => {
+          const response = await fetch("https://ignav.com/api/fares/booking-links", {
+            method: "POST",
+            headers: {
+              "X-Api-Key": ignavKey,
+              "Content-Type": "application/json",
+              "Accept": "application/json",
+              "User-Agent": SEARCH_USER_AGENT
+            },
+            body: JSON.stringify({ ignav_id: ignavId }),
+            signal: AbortSignal.timeout(15000)
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            const message = response.status === 401 || response.status === 403
+              ? "مفتاح Ignav غير صالح أو لا يملك صلاحية روابط الحجز."
+              : "تعذر جلب روابط الحجز لهذا العرض الآن.";
+            return json({ ok: false, error: message }, 503);
+          }
+          const links = (Array.isArray(payload.booking_options) ? payload.booking_options : [])
+            .flatMap(option => Array.isArray(option.links) ? option.links : [])
+            .map(link => {
+              const rawUrl = String(link.url || "").trim();
+              if (!rawUrl) return null;
+              try {
+                const url = new URL(/^https:\/\//i.test(rawUrl) ? rawUrl : "https://" + rawUrl);
+                if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return null;
+                return {
+                  providerName: String(link.provider_name || "موقع الحجز"),
+                  providerType: String(link.provider_type || ""),
+                  price: Number.isFinite(Number(link.price?.amount)) ? Number(link.price.amount) : null,
+                  currency: String(link.price?.currency || ""),
+                  url: url.toString()
+                };
+              } catch (_) {
+                return null;
+              }
+            })
+            .filter(Boolean)
+            .slice(0, 12);
+          return json({
+            ok: true,
+            links,
+            message: links.length
+              ? "روابط الحجز متاحة. راجع السعر النهائي وشروط الأمتعة قبل الدفع."
+              : "لم يوفر Ignav رابط حجز صالحًا لهذا العرض حاليًا."
+          });
+        });
+      } catch (error) {
+        console.error("[HorusFlights] Booking-link lookup failed", String(error?.message || error).slice(0, 160));
+        return json({ ok: false, error: "تعذر جلب روابط الحجز الآن." }, 503);
       }
     }
 
