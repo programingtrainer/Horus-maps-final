@@ -776,6 +776,9 @@ class MainActivity : ComponentActivity() {
                 var travelDate by remember {
                     mutableStateOf(java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().apply { add(Calendar.DAY_OF_MONTH, 1) }.time))
                 }
+                var travelTime by remember {
+                    mutableStateOf(java.text.SimpleDateFormat("HH:mm", Locale.US).format(Calendar.getInstance().apply { add(Calendar.MINUTE, 30) }.time))
+                }
 
                 fun activateAccount(
                     email: String,
@@ -1305,8 +1308,18 @@ class MainActivity : ComponentActivity() {
                     transportSearchJob = accountScope.launch {
                         try {
                             val result = if (mode == "transit") {
+                                val departureCalendar = Calendar.getInstance()
+                                val dateParts = dateOverride.split("-")
+                                val timeParts = travelTime.split(":")
+                                if (dateParts.size == 3 && timeParts.size == 2) {
+                                    departureCalendar.set(
+                                        dateParts[0].toInt(), dateParts[1].toInt() - 1, dateParts[2].toInt(),
+                                        timeParts[0].toInt(), timeParts[1].toInt(), 0
+                                    )
+                                    departureCalendar.set(Calendar.MILLISECOND, 0)
+                                }
                                 val departureTime = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
-                                    .format(Calendar.getInstance().time)
+                                    .format(departureCalendar.time)
                                 HorusMapSearchApi.searchTransit(
                                     origin.latitude, origin.longitude,
                                     destination.latitude, destination.longitude,
@@ -1363,7 +1376,24 @@ class MainActivity : ComponentActivity() {
                         { _, year, month, day ->
                             val selectedDate = String.format(Locale.US, "%04d-%02d-%02d", year, month + 1, day)
                             travelDate = selectedDate
-                            if (selectedTravelMode == "flight") searchSelectedTransport("flight", selectedDate)
+                            when (selectedTravelMode) {
+                                "flight" -> searchSelectedTransport("flight", selectedDate)
+                                "transit" -> {
+                                    val timeParts = travelTime.split(":")
+                                    val hour = timeParts.getOrNull(0)?.toIntOrNull() ?: 9
+                                    val minute = timeParts.getOrNull(1)?.toIntOrNull() ?: 0
+                                    android.app.TimePickerDialog(
+                                        this@MainActivity,
+                                        { _, selectedHour, selectedMinute ->
+                                            travelTime = String.format(Locale.US, "%02d:%02d", selectedHour, selectedMinute)
+                                            searchSelectedTransport("transit", selectedDate)
+                                        },
+                                        hour,
+                                        minute,
+                                        true
+                                    ).show()
+                                }
+                            }
                         },
                         calendar.get(Calendar.YEAR),
                         calendar.get(Calendar.MONTH),
