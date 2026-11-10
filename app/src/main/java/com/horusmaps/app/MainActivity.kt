@@ -439,16 +439,33 @@ class MainActivity : ComponentActivity() {
                 map.queryRenderedFeatures(map.projection.toScreenLocation(tappedPoint))
             }.getOrDefault(emptyList())
             val selected: HorusNavigationDestination? = features.firstNotNullOfOrNull { feature ->
-                val name = listOf("name", "name:ar", "name:en", "name_int")
+                val properties = feature.properties() ?: return@firstNotNullOfOrNull null
+                fun value(key: String): String =
+                    runCatching { feature.getStringProperty(key)?.trim().orEmpty().lowercase(Locale.ROOT) }
+                        .getOrDefault("")
+                val values = listOf(
+                    "amenity", "shop", "healthcare", "railway", "public_transport",
+                    "highway", "leisure", "tourism", "office", "craft", "aeroway",
+                    "place", "class", "subclass", "type", "kind", "religion"
+                ).associateWith(::value)
+                val tags = values.values.filter(String::isNotBlank).toSet()
+                val categoryName = when {
+                    tags.any { it in setOf("place_of_worship", "mosque", "masjid", "religious_muslim") } ||
+                        (value("religion") == "muslim" && value("amenity") == "place_of_worship") -> "مسجد"
+                    tags.any { it in setOf("hospital", "clinic", "healthcare") } -> "منشأة طبية"
+                    tags.any { it in setOf("pharmacy", "chemist") } -> "صيدلية"
+                    tags.any { it in setOf("supermarket", "grocery", "convenience", "department_store") } -> "متجر"
+                    tags.any { it in setOf("restaurant", "fast_food", "cafe") } -> "مطعم"
+                    tags.any { it in setOf("fuel", "gas_station") } -> "محطة وقود"
+                    tags.any { it in setOf("rail", "railway", "station", "subway", "tram", "light_rail") } -> "محطة قطار"
+                    tags.any { it in setOf("airport", "aerodrome") } -> "مطار"
+                    tags.any { it in setOf("bus", "bus_stop", "bus_station") } -> "محطة حافلات"
+                    else -> null
+                } ?: return@firstNotNullOfOrNull null
+                val name = listOf("name", "name:ar", "name_ar", "name:en", "name_en", "name_int")
                     .firstNotNullOfOrNull { key ->
                         runCatching { feature.getStringProperty(key)?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
-                    } ?: return@firstNotNullOfOrNull null
-                val properties = feature.properties() ?: return@firstNotNullOfOrNull null
-                val placeKeys = listOf(
-                    "amenity", "shop", "healthcare", "railway", "public_transport",
-                    "highway", "leisure", "tourism", "office", "craft", "aeroway", "place"
-                )
-                if (placeKeys.none { key -> properties.has(key) }) return@firstNotNullOfOrNull null
+                    } ?: categoryName
                 val address = listOf("addr:street", "addr:suburb", "addr:city", "addr:state", "addr:country")
                     .mapNotNull { key ->
                         runCatching { feature.getStringProperty(key)?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
