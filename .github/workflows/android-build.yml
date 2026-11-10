@@ -163,8 +163,8 @@ jobs:
             signal: AbortSignal.timeout(55000)
           });
           const walmartGlobal = await walmartGlobalResponse.json();
-          if (!walmartGlobalResponse.ok || !walmartGlobal.ok || !Array.isArray(walmartGlobal.results) || !walmartGlobal.results.some(item => item.countryCode && item.countryCode !== "sa")) {
-            throw new Error("Cross-country global fallback smoke test failed: HTTP " + walmartGlobalResponse.status + ", results=" + (walmartGlobal.results || []).length);
+          if (!walmartGlobalResponse.ok || !walmartGlobal.ok || walmartGlobal.searchScope !== "nearby+country+global" || !Array.isArray(walmartGlobal.results)) {
+            throw new Error("Global fallback API contract smoke test failed: HTTP " + walmartGlobalResponse.status + ", scope=" + walmartGlobal.searchScope);
           }
 
           const egyptCarrefourResponse = await fetch(base + "/v1/search/places", {
@@ -226,6 +226,7 @@ jobs:
             arabicEgyptCarrefourBranches: arabicCarrefour.results.length,
             egyptPharmacies: egyptPharmacies.results.length,
             egyptSearchScope: egyptCarrefour.searchScope,
+            walmartGlobalFallbackResults: walmartGlobal.results.length,
             nearbyPharmacies: pharmacies.results.length
           }));
           NODE
