@@ -167,13 +167,19 @@ async function findNearbyAirports(env, token, latitude, longitude) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error("Airport lookup failed (HTTP " + response.status + ").");
-  return (payload.data || []).filter(item => /^[A-Z]{3}$/.test(String(item.iataCode || "")))
-    .slice(0, 3).map(item => ({
-      iataCode: item.iataCode,
-      name: item.name || item.address?.cityName || item.iataCode,
-      cityName: item.address?.cityName || "",
-      countryCode: item.address?.countryCode || ""
-    }));
+  return (payload.data || []).filter(item =>
+    /^[A-Z]{3}$/.test(String(item.iataCode || "")) &&
+    Number.isFinite(Number(item.geoCode?.latitude)) &&
+    Number.isFinite(Number(item.geoCode?.longitude))
+  ).slice(0, 3).map(item => ({
+    iataCode: item.iataCode,
+    name: item.name || item.address?.cityName || item.iataCode,
+    cityName: item.address?.cityName || "",
+    countryCode: item.address?.countryCode || "",
+    latitude: Number(item.geoCode.latitude),
+    longitude: Number(item.geoCode.longitude),
+    distanceMeters: Math.round(haversineMeters(latitude, longitude, Number(item.geoCode.latitude), Number(item.geoCode.longitude)))
+  })).sort((a, b) => a.distanceMeters - b.distanceMeters);
 }
 
 const SEARCH_OVERPASS_ENDPOINTS = [
@@ -1487,10 +1493,17 @@ export default {
               arrival: segment.arrival?.at || "",
               duration: segment.duration || ""
             }));
+            const airDistanceMeters = Math.round(haversineMeters(
+              pair.origin.latitude, pair.origin.longitude,
+              pair.destination.latitude, pair.destination.longitude
+            ));
+            const estimatedFlightDurationSeconds = Math.round((airDistanceMeters / 1000 / 800) * 3600 + 45 * 60);
             return {
               id: String(offer.id || ""),
               origin: pair.origin,
               destination: pair.destination,
+              airDistanceMeters,
+              estimatedFlightDurationSeconds,
               duration: itinerary.duration || "",
               stops: Math.max(0, segments.length - 1),
               currency: offer.price?.currency || "",
@@ -1533,6 +1546,16 @@ export default {
             error: mode === "transit"
               ? "مسارات القطارات تحتاج إلى بيانات جداول ومشغّلي النقل في المنطقة."
               : "الملاحة الجوية غير متاحة كمسار قيادة أو مشي. يمكن عرض المسافة الجوية كتقدير منفصل."
+          }, 422);
+        }
+
+        const straightLineMeters = haversineMeters(originLat, originLon, destinationLat, destinationLon);
+        if (mode === "walking" && straightLineMeters > 40000) {
+          return json({
+            ok: false,
+            code: "WALKING_DISTANCE_EXCEEDED",
+            straightLineDistanceMeters: Math.round(straightLineMeters),
+            error: "المسافة بعيدة جدًا للمشي (أكثر من 40 كم بخط مستقيم). اختر السيارة أو وسيلة نقل بين المدن."
           }, 422);
         }
 
@@ -1606,7 +1629,12 @@ export default {
         });
       } catch (error) {
         console.error("[HorusRoute] Route request failed", String(error?.message || error).slice(0, 180));
-        return json({ ok: false, error: "تعذر حساب الطريق الآن. حاول مرة أخرى بعد قليل." }, 503);
+        return json({
+          ok: false,
+          error: error?.status === 422
+            ? (error.message || "لا يوجد مسار مناسب لوسيلة الانتقال المختارة.")
+            : "تعذر العثور على مسار صالح بين النقطتين. تحقق من إمكانية الوصول أو حاول مرة أخرى."
+        }, Number(error?.status) || 503);
       }
     }
 
