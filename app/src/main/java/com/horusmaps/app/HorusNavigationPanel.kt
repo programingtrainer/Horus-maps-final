@@ -228,3 +228,62 @@ fun HorusNavigationManeuverCard(
         }
     }
 }
+
+@Composable
+fun HorusNavigationActiveHud(
+    remainingMeters: Int,
+    remainingSeconds: Int,
+    maneuver: HorusRouteStep?,
+    distanceToManeuverMeters: Int?,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(0.94f),
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xFF102A43),
+        shadowElevation = 10.dp
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("متبقي للوصول", color = Color(0xFFB8D5F2), fontSize = 10.sp)
+                    Text(formatNavigationDistance(remainingMeters), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                }
+                Column {
+                    Text("الوقت المتبقي", color = Color(0xFFB8D5F2), fontSize = 10.sp)
+                    Text(formatNavigationDuration(remainingSeconds), color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Text(
+                    "إنهاء",
+                    modifier = Modifier
+                        .background(Color(0xFF29465F), RoundedCornerShape(10.dp))
+                        .clickable(onClick = onStop)
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            if (maneuver != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("التالي", color = Color(0xFFB8D5F2), fontSize = 9.sp)
+                        Text(maneuverArabicLabel(maneuver), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        distanceToManeuverMeters?.let {
+                            Text(
+                                if (it < 1000) "بعد $it متر" else String.format(java.util.Locale.getDefault(), "بعد %.1f كم", it / 1000.0),
+                                color = Color(0xFF8FC5FF), fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
