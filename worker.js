@@ -1066,6 +1066,39 @@ export default {
         if (merged.length === 0 && !nominatimPayload && photonResults.every(result => result.status === "rejected")) {
           return json({ ok: false, error: "تعذر الاتصال بخدمات البحث الجغرافي الآن." }, 503);
         }
+
+        const wantedNames = new Set(queryVariants.map(normalizeSearchText));
+        const queryTokens = normalizeSearchText(rawQuery).split(" ").filter(Boolean);
+        const scoreFeature = feature => {
+          const properties = feature.properties || {};
+          const name = normalizeSearchText(properties.name || properties.street || "");
+          const display = normalizeSearchText(properties.display_name || "");
+          const exact = wantedNames.has(name) ? 100 : wantedNames.has(display) ? 85 : 0;
+          const tokenHits = queryTokens.filter(token => name.includes(token) || display.includes(token)).length;
+          const importance = Math.max(0, Math.min(1, Number(properties.importance) || 0));
+          const placeRank = Math.max(0, 30 - (Number(properties.place_rank) || 30)) / 3;
+          const coords = feature.geometry?.coordinates;
+          let proximity = 0;
+          if (latitude !== null && longitude !== null && Array.isArray(coords)) {
+            const pairs = [];
+            const collect = value => {
+              if (!Array.isArray(value)) return;
+              if (value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number") {
+                pairs.push(value);
+                return;
+              }
+              for (const child of value) collect(child);
+            };
+            collect(coords);
+            if (pairs.length) {
+              const lat = pairs.reduce((sum, point) => sum + point[1], 0) / pairs.length;
+              const lon = pairs.reduce((sum, point) => sum + point[0], 0) / pairs.length;
+              proximity = Math.max(0, 12 - haversineMeters(latitude, longitude, lat, lon) / 150000);
+            }
+          }
+          return exact + tokenHits * 5 + importance * 10 + placeRank + proximity;
+        };
+        merged.sort((left, right) => scoreFeature(right) - scoreFeature(left));
         return json({ ok: true, type: "FeatureCollection", features: merged.slice(0, 24) });
       });
     }
