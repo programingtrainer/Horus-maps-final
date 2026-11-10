@@ -1291,66 +1291,132 @@ export default {
         if ([originLat, originLon, destinationLat, destinationLon].some(value => value === null)) {
           return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
         }
-        if (!env.TRANSITLAND_API_KEY) {
+        if (!env.GOOGLE_MAPS_API_KEY) {
           return json({
             ok: false, providerConfigured: false, code: "TRANSIT_PROVIDER_NOT_CONFIGURED",
-            error: "محرك القطارات يحتاج مفتاح Transitland API. أضف TRANSITLAND_API_KEY إلى أسرار Worker."
+            error: "بحث القطارات يحتاج مفتاح Google Maps Platform مع تفعيل Routes API والفوترة. أضف GOOGLE_MAPS_API_KEY إلى أسرار Worker."
           }, 503);
         }
-        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || "")) ? String(body.date) : new Date().toISOString().slice(0, 10);
-        const time = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(body.time || "")) ? String(body.time) : new Date().toISOString().slice(11, 16);
-        const target = new URL("https://transit.land/api/v2/routing/otp/plan");
-        target.searchParams.set("fromPlace", originLat + "," + originLon);
-        target.searchParams.set("toPlace", destinationLat + "," + destinationLon);
-        target.searchParams.set("date", date);
-        target.searchParams.set("time", time);
-        target.searchParams.set("maxItineraries", "5");
-        target.searchParams.set("showIntermediateStops", "true");
-        const response = await fetch(target, {
-          headers: { "apikey": env.TRANSITLAND_API_KEY, "Accept": "application/json", "User-Agent": SEARCH_USER_AGENT },
-          signal: AbortSignal.timeout(20000)
+        const departureTime = String(body.departureTime || "");
+        const departure = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:Z|[+-]\\d{2}:\\d{2})$/.test(departureTime)
+          ? departureTime : new Date().toISOString();
+        const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": env.GOOGLE_MAPS_API_KEY,
+            "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,routes.legs.steps.travelMode,routes.legs.steps.staticDuration,routes.legs.steps.polyline.encodedPolyline,routes.legs.steps.startLocation,routes.legs.steps.endLocation,routes.legs.steps.transitDetails",
+            "Accept": "application/json"
+          },
+          body: JSON.stringify({
+            origin: { location: { latLng: { latitude: originLat, longitude: originLon } } },
+            destination: { location: { latLng: { latitude: destinationLat, longitude: destinationLon } } },
+            travelMode: "TRANSIT",
+            departureTime: departure,
+            computeAlternativeRoutes: true,
+            transitPreferences: {
+              allowedTravelModes: ["TRAIN"],
+              routingPreference: "FEWER_TRANSFERS"
+            }
+          }),
+          signal: AbortSignal.timeout(22000)
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-          console.warn("[HorusTransit] Provider HTTP", response.status);
-          return json({ ok: false, error: "تعذر الوصول إلى بيانات القطارات حاليًا. حاول لاحقًا." }, 502);
+          console.warn("[HorusTransit] Google Routes API HTTP", response.status);
+          return json({ ok: false, error: "تعذر الوصول إلى بيانات القطارات الآن. تحقق من تفعيل Routes API ومفتاح Google." }, 502);
         }
-        const itineraries = payload.plan?.itineraries || [];
-        // Do not present bus-only itineraries as train journeys. Keep walk/bus
-        // feeder legs only when the same itinerary contains an actual rail mode.
-        const railItineraries = itineraries.filter(itinerary =>
-          (itinerary.legs || []).some(leg =>
-            ["RAIL", "TRAIN", "SUBWAY", "METRO", "TRAM"].includes(String(leg.mode || "").toUpperCase())
-          )
-        );
-        const options = railItineraries.map((itinerary, index) => ({
-          id: String(index + 1),
-          startTime: itinerary.startTime || null,
-          endTime: itinerary.endTime || null,
-          durationSeconds: Number(itinerary.duration) || 0,
-          distanceMeters: Math.round(Number(itinerary.distance) || 0),
-          transfers: Number(itinerary.transfers) || 0,
-          legs: (itinerary.legs || []).map(leg => ({
-            mode: String(leg.mode || ""),
-            agencyName: String(leg.agencyName || ""),
-            routeName: String(leg.routeShortName || leg.routeLongName || leg.route || ""),
-            headsign: String(leg.headsign || ""),
-            from: String(leg.from?.name || leg.from?.stop?.name || ""),
-            to: String(leg.to?.name || leg.to?.stop?.name || ""),
-            departure: leg.startTime || null,
-            arrival: leg.endTime || null,
-            durationSeconds: Number(leg.duration) || 0
-          }))
-        }));
+        const decodePolyline = encoded => {
+          let index = 0, latitude = 0, longitude = 0;
+          const points = [];
+          const readValue = () => {
+            let result = 0, shift = 0, byte;
+            do {
+              if (index >= encoded.length) throw new Error("Invalid transit polyline");
+              byte = encoded.charCodeAt(index++) - 63;
+              result |= (byte & 0x1f) << shift;
+              shift += 5;
+            } while (byte >= 0x20);
+            return (result & 1) ? ~(result >> 1) : (result >> 1);
+          };
+          while (index < encoded.length) {
+            latitude += readValue();
+            longitude += readValue();
+            points.push([longitude / 1e5, latitude / 1e5]);
+          }
+          return points;
+        };
+        const durationSeconds = value => {
+          const match = String(value || "").match(/^([0-9]+(?:\\.[0-9]+)?)s$/);
+          return match ? Math.round(Number(match[1])) : 0;
+        };
+        const routes = payload.routes || [];
+        const options = routes.map((route, index) => {
+          const steps = (route.legs || []).flatMap(leg => leg.steps || []);
+          const transitSteps = steps.filter(step => step.transitDetails);
+          const railTypes = new Set(["HEAVY_RAIL", "HIGH_SPEED_TRAIN", "COMMUTER_TRAIN", "TRAIN", "RAIL", "SUBWAY", "METRO_RAIL"]);
+          const railSteps = transitSteps.filter(step => railTypes.has(
+            String(step.transitDetails?.transitLine?.vehicle?.type || "").toUpperCase()
+          ));
+          if (!railSteps.length) return null;
+          const coordinates = [];
+          const legs = [];
+          for (const step of steps) {
+            const encoded = step.polyline?.encodedPolyline;
+            if (encoded) {
+              try {
+                const decoded = decodePolyline(encoded);
+                if (coordinates.length && decoded.length && coordinates[coordinates.length - 1][0] === decoded[0][0] &&
+                    coordinates[coordinates.length - 1][1] === decoded[0][1]) decoded.shift();
+                coordinates.push(...decoded);
+              } catch {}
+            }
+            const details = step.transitDetails;
+            if (details) {
+              const line = details.transitLine || {};
+              const departureStop = details.stopDetails?.departureStop || {};
+              const arrivalStop = details.stopDetails?.arrivalStop || {};
+              const departureTime = details.stopDetails?.departureTime || "";
+              const arrivalTime = details.stopDetails?.arrivalTime || "";
+              legs.push({
+                mode: String(line.vehicle?.type || "TRAIN"),
+                agencyName: String(line.agencies?.[0]?.name || ""),
+                routeName: String(line.nameShort || line.name || ""),
+                headsign: String(details.headsign || ""),
+                from: String(departureStop.name || ""),
+                to: String(arrivalStop.name || ""),
+                departure: departureTime,
+                arrival: arrivalTime,
+                durationSeconds: durationSeconds(step.staticDuration || step.duration)
+              });
+            } else if (String(step.travelMode || "").toUpperCase() === "WALK") {
+              legs.push({
+                mode: "WALK", agencyName: "", routeName: "",
+                from: "مشي", to: "المحطة التالية",
+                departure: "", arrival: "",
+                durationSeconds: durationSeconds(step.staticDuration || step.duration)
+              });
+            }
+          }
+          const transfers = Math.max(0, railSteps.length - 1);
+          return {
+            id: String(index + 1),
+            durationSeconds: durationSeconds(route.duration),
+            distanceMeters: Math.round(Number(route.distanceMeters) || 0),
+            transfers,
+            legs,
+            geometry: coordinates.length > 1 ? { type: "LineString", coordinates } : null
+          };
+        }).filter(Boolean);
         return json({
-          ok: true, provider: "Transitland", date, time,
+          ok: true, provider: "Google Routes API", departureTime: departure,
           available: options.length > 0,
-          message: options.length ? null : "لم نعثر على مسار يحتوي على قطار أو مترو بين النقطتين في بيانات المنطقة والتوقيت المحدد. قد لا تغطي قاعدة البيانات هذه المنطقة.",
+          message: options.length ? null : "لم نعثر على رحلة قطار متاحة بين النقطتين في موعد المغادرة المحدد. قد تختلف التغطية حسب البلد وشركة النقل.",
           options
         });
       } catch (error) {
         console.error("[HorusTransit] Search failed", String(error?.message || error).slice(0, 160));
-        return json({ ok: false, error: "تعذر البحث عن القطارات الآن. حاول مرة أخرى." }, Number(error?.status) || 503);
+        return json({ ok: false, error: "تعذر البحث عن القطارات الآن. حاول مرة أخرى." }, 503);
       }
     }
 
