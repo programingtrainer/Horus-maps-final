@@ -133,7 +133,8 @@ data class HorusTransportSearchResult(
     val provider: String,
     val available: Boolean,
     val message: String?,
-    val options: List<String>
+    val options: List<String>,
+    val geometryGeoJson: String? = null
 )
 
 data class HorusRouteResult(
@@ -308,12 +309,12 @@ object HorusMapSearchApi {
     suspend fun searchTransit(
         originLatitude: Double, originLongitude: Double,
         destinationLatitude: Double, destinationLongitude: Double,
-        date: String, time: String
+        departureTime: String
     ): HorusTransportSearchResult = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("originLatitude", originLatitude).put("originLongitude", originLongitude)
             .put("destinationLatitude", destinationLatitude).put("destinationLongitude", destinationLongitude)
-            .put("date", date).put("time", time)
+            .put("departureTime", departureTime)
         val root = JSONObject(post("$BASE_URL/transit", body))
         if (!root.optBoolean("ok")) throw IllegalStateException(root.optString("error", "تعذر البحث عن القطارات."))
         val options = root.optJSONArray("options") ?: JSONArray()
@@ -332,8 +333,9 @@ object HorusMapSearchApi {
                 }
             }
         }
-        HorusTransportSearchResult(root.optString("provider", "Transitland"), root.optBoolean("available"),
-            root.optString("message").takeIf { it.isNotBlank() && it != "null" }, lines)
+        val firstGeometry = options.optJSONObject(0)?.optJSONObject("geometry")?.toString()
+        HorusTransportSearchResult(root.optString("provider", "Google Routes API"), root.optBoolean("available"),
+            root.optString("message").takeIf { it.isNotBlank() && it != "null" }, lines, firstGeometry)
     }
 
     suspend fun searchFlights(
