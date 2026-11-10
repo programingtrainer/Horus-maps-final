@@ -1103,6 +1103,122 @@ export default {
       });
     }
 
+    if (url.pathname === "/v1/search/route" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const originLat = validCoordinate(body.originLatitude, -90, 90);
+        const originLon = validCoordinate(body.originLongitude, -180, 180);
+        const destinationLat = validCoordinate(body.destinationLatitude, -90, 90);
+        const destinationLon = validCoordinate(body.destinationLongitude, -180, 180);
+        const mode = String(body.mode || "driving").toLowerCase();
+        if ([originLat, originLon, destinationLat, destinationLon].some(value => value === null)) {
+          return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
+        }
+        if (!["driving", "walking"].includes(mode)) {
+          return json({
+            ok: false,
+            error: mode === "transit"
+              ? "مسارات القطارات تحتاج إلى بيانات جداول ومشغّلي النقل في المنطقة."
+              : "الملاحة الجوية غير متاحة كمسار قيادة أو مشي. يمكن عرض المسافة الجوية كتقدير منفصل."
+          }, 422);
+        }
+
+        let distanceMeters = 0;
+        let durationSeconds = 0;
+        let geometry = null;
+        let provider = "";
+        if (mode === "driving") {
+          const target = new URL(
+            "https://router.project-osrm.org/route/v1/driving/" +
+            originLon + "," + originLat + ";" + destinationLon + "," + destinationLat
+          );
+          target.searchParams.set("overview", "full");
+          target.searchParams.set("geometries", "geojson");
+          target.searchParams.set("steps", "true");
+          const response = await fetch(target.toString(), {
+            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+            signal: AbortSignal.timeout(15000)
+          });
+          if (!response.ok) throw new Error("Driving router HTTP " + response.status);
+          const payload = await response.json();
+          const route = payload.routes?.[0];
+          if (payload.code !== "Ok" || !route?.geometry?.coordinates?.length) {
+            return json({ ok: false, error: "لم نعثر على طريق مناسب بالسيارة بين النقطتين." }, 404);
+          }
+          distanceMeters = Number(route.distance);
+          durationSeconds = Number(route.duration);
+          geometry = route.geometry;
+          provider = "OSRM";
+        } else {
+          const target = new URL("https://valhalla1.openstreetmap.de/route");
+          const requestBody = {
+            locations: [
+              { lat: originLat, lon: originLon, type: "break" },
+              { lat: destinationLat, lon: destinationLon, type: "break" }
+            ],
+            costing: "pedestrian",
+            units: "kilometers",
+            directions_options: { units: "kilometers" }
+          };
+          const response = await fetch(target.toString(), {
+            method: "POST",
+            headers: {
+              "User-Agent": SEARCH_USER_AGENT,
+              "Content-Type": "application/json",
+              "Accept": "application/json"
+            },
+            body: JSON.stringify(requestBody),
+            signal: AbortSignal.timeout(15000)
+          });
+          if (!response.ok) throw new Error("Walking router HTTP " + response.status);
+          const payload = await response.json();
+          const trip = payload.trip;
+          const leg = trip?.legs?.[0];
+          if (!leg?.shape) {
+            return json({ ok: false, error: "لم نعثر على مسار مشي مناسب بين النقطتين." }, 404);
+          }
+          const decodePolyline6 = encoded => {
+            let index = 0, latitude = 0, longitude = 0;
+            const coordinates = [];
+            const readValue = () => {
+              let result = 0, shift = 0, byte;
+              do {
+                if (index >= encoded.length) throw new Error("Invalid walking route geometry");
+                byte = encoded.charCodeAt(index++) - 63;
+                result |= (byte & 0x1f) << shift;
+                shift += 5;
+              } while (byte >= 0x20);
+              return (result & 1) ? ~(result >> 1) : (result >> 1);
+            };
+            while (index < encoded.length) {
+              latitude += readValue();
+              longitude += readValue();
+              coordinates.push([longitude / 1e6, latitude / 1e6]);
+            }
+            return coordinates;
+          };
+          distanceMeters = Number(leg.summary?.length) * 1000;
+          durationSeconds = Number(leg.summary?.time);
+          geometry = { type: "LineString", coordinates: decodePolyline6(leg.shape) };
+          provider = "Valhalla";
+        }
+        if (!Number.isFinite(distanceMeters) || !Number.isFinite(durationSeconds) || !geometry?.coordinates?.length) {
+          throw new Error("Router returned incomplete route data");
+        }
+        return json({
+          ok: true,
+          mode,
+          distanceMeters: Math.round(distanceMeters),
+          durationSeconds: Math.round(durationSeconds),
+          geometry,
+          provider
+        });
+      } catch (error) {
+        console.error("[HorusRoute] Route request failed", String(error?.message || error).slice(0, 180));
+        return json({ ok: false, error: "تعذر حساب الطريق الآن. حاول مرة أخرى بعد قليل." }, 503);
+      }
+    }
+
     if (url.pathname === "/v1/search/places" && request.method === "POST") {
       try {
         const body = await readJson(request);
