@@ -100,6 +100,7 @@ import org.maplibre.android.maps.Style
 import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
+import java.util.Locale
 
 
 /**
