@@ -322,7 +322,9 @@ object HorusMapSearchApi {
             for (index in 0 until options.length()) {
                 val option = options.optJSONObject(index) ?: continue
                 val durationMinutes = (option.optInt("durationSeconds") / 60).coerceAtLeast(1)
-                add("الخيار ${index + 1} • ${durationMinutes} دقيقة • ${option.optInt("transfers")} تبديل")
+                val distanceMeters = option.optInt("distanceMeters")
+                val distanceLabel = if (distanceMeters > 0) " • ${String.format(Locale.US, "%.1f", distanceMeters / 1000.0)} كم" else ""
+                add("الخيار ${index + 1} • ${durationMinutes} دقيقة • ${option.optInt("transfers")} تبديل${distanceLabel}")
                 val legs = option.optJSONArray("legs") ?: JSONArray()
                 for (legIndex in 0 until legs.length()) {
                     val leg = legs.optJSONObject(legIndex) ?: continue
