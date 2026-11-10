@@ -367,7 +367,7 @@ class MainActivity : ComponentActivity() {
             runCatching { map.removeOnMapClickListener(old) }
         }
         val listener = org.maplibre.android.maps.MapLibreMap.OnMapClickListener { tappedPoint ->
-            val features: List<com.mapbox.geojson.Feature> = runCatching {
+            val features: List<org.maplibre.geojson.Feature> = runCatching {
                 map.queryRenderedFeatures(map.projection.toScreenLocation(tappedPoint))
             }.getOrDefault(emptyList())
             val selected: HorusNavigationDestination? = features.firstNotNullOfOrNull { feature ->
