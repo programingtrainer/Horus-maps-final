@@ -336,7 +336,7 @@ object HorusMapSearchApi {
             }
         }
         val firstGeometry = options.optJSONObject(0)?.optJSONObject("geometry")?.toString()
-        HorusTransportSearchResult(root.optString("provider", "Google Routes API"), root.optBoolean("available"),
+        HorusTransportSearchResult(root.optString("provider", "Transitous / MOTIS"), root.optBoolean("available"),
             root.optString("message").takeIf { it.isNotBlank() && it != "null" }, lines, firstGeometry)
     }
 
