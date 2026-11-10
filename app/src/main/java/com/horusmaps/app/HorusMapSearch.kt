@@ -153,7 +153,8 @@ data class HorusPriceOffer(
     val stops: Int,
     val durationMinutes: Int,
     val foundAt: String,
-    val bookingUrl: String
+    val bookingUrl: String,
+    val ignavId: String = ""
 )
 
 data class HorusTransportSearchResult(
@@ -511,7 +512,8 @@ object HorusMapSearchApi {
                         stops = offer.optInt("stops"),
                         durationMinutes = offer.optInt("durationMinutes"),
                         foundAt = offer.optString("foundAt"),
-                        bookingUrl = offer.optString("bookingUrl")
+                        bookingUrl = offer.optString("bookingUrl"),
+                        ignavId = offer.optString("ignavId")
                     )
                 )
             }
@@ -526,6 +528,21 @@ object HorusMapSearchApi {
             priceMessage = root.optString("priceMessage").takeIf { it.isNotBlank() && it != "null" },
             priceOffers = priceOffers
         )
+    }
+
+    suspend fun bookingLink(ignavId: String): String? = withContext(Dispatchers.IO) {
+        require(ignavId.isNotBlank()) { "معرّف عرض الطيران غير متاح." }
+        val body = JSONObject().put("ignavId", ignavId)
+        val root = JSONObject(post("$BASE_URL/flights/booking-links", body))
+        if (!root.optBoolean("ok")) {
+            throw IllegalStateException(root.optString("error", "تعذر جلب روابط الحجز."))
+        }
+        val links = root.optJSONArray("links") ?: JSONArray()
+        for (index in 0 until links.length()) {
+            val url = links.optJSONObject(index)?.optString("url").orEmpty()
+            if (url.startsWith("https://", ignoreCase = true)) return@withContext url
+        }
+        null
     }
 
     suspend fun route(
