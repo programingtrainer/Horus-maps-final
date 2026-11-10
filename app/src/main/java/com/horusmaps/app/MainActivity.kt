@@ -1300,12 +1300,12 @@ class MainActivity : ComponentActivity() {
                     accountScope.launch {
                         try {
                             val result = if (mode == "transit") {
-                                val now = Calendar.getInstance()
+                                val departureTime = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+                                    .format(Calendar.getInstance().time)
                                 HorusMapSearchApi.searchTransit(
                                     origin.latitude, origin.longitude,
                                     destination.latitude, destination.longitude,
-                                    java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now.time),
-                                    java.text.SimpleDateFormat("HH:mm", Locale.US).format(now.time)
+                                    departureTime
                                 )
                             } else {
                                 HorusMapSearchApi.searchFlights(
@@ -1314,7 +1314,27 @@ class MainActivity : ComponentActivity() {
                                     dateOverride
                                 )
                             }
-                            if (selectedTravelMode == mode) transportSearchResult = result
+                            if (selectedTravelMode == mode) {
+                                transportSearchResult = result
+                                if (mode == "transit" && !result.geometryGeoJson.isNullOrBlank()) {
+                                    val coordinates = org.json.JSONObject(result.geometryGeoJson).optJSONArray("coordinates")
+                                    val points = buildList {
+                                        for (index in 0 until (coordinates?.length() ?: 0)) {
+                                            val pair = coordinates?.optJSONArray(index) ?: continue
+                                            if (pair.length() >= 2) add(LatLng(pair.getDouble(1), pair.getDouble(0)))
+                                        }
+                                    }
+                                    if (points.size >= 2) {
+                                        routePolyline?.let { runCatching { map.removeAnnotation(it) } }
+                                        routePolyline = map.addPolyline(
+                                            PolylineOptions().addAll(points)
+                                                .color(android.graphics.Color.rgb(111, 66, 193))
+                                                .width(6f)
+                                        )
+                                        routeCoordinates = points
+                                    }
+                                }
+                            }
                         } catch (error: CancellationException) {
                             throw error
                         } catch (error: Exception) {
