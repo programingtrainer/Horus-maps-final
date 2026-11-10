@@ -1374,8 +1374,10 @@ export default {
               headsign: String(leg.headsign || ""),
               from: String(from.name || ""),
               to: String(to.name || ""),
-              departure: String(leg.startTime || leg.scheduledStartTime || ""),
-              arrival: String(leg.endTime || leg.scheduledEndTime || ""),
+              departure: String(leg.startTime || ""),
+              arrival: String(leg.endTime || ""),
+              scheduledDeparture: String(leg.scheduledStartTime || ""),
+              scheduledArrival: String(leg.scheduledEndTime || ""),
               durationSeconds: Math.max(0, Number(leg.duration) || 0),
               realTime: Boolean(leg.realTime),
               cancelled: Boolean(leg.cancelled)
