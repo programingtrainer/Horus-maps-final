@@ -190,7 +190,7 @@ function normalizeNavo24Flight(flight) {
     timezone: String(flight.tz || ""),
     stops: Math.max(0, Number(flight.stops) || 0),
     via: Array.isArray(flight.via) ? flight.via.map(item => String(item.iata || item.name || "")).filter(Boolean) : [],
-    status: String(flight.status || ""),
+    status: String(flight.status || flight.status_info?.label || flight.status_info?.code || ""),
     updatedAt: String(flight.updated_at || ""),
     source: String(flight.source || "Navo24"),
     cargo: Boolean(flight.cargo)
@@ -1574,38 +1574,80 @@ export default {
             });
           }
 
-          const target = new URL("https://flight.navo24.com/api/v1/flights");
+          const isFreeDemoRoute =
+            (originAirport.iataCode === "HKG" && destinationAirport.iataCode === "FRA") ||
+            (originAirport.iataCode === "FRA" && destinationAirport.iataCode === "HKG");
+          const navo24Key = String(env.NAVO24_API_KEY || "").trim();
+          if (!navo24Key && !isFreeDemoRoute) {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
+              date, available: false, pricesAvailable: false,
+              code: "FLIGHT_PROVIDER_KEY_REQUIRED",
+              message: "مصدر Navo24 يتيح مسارًا تجريبيًا واحدًا دون مفتاح (هونغ كونغ ↔ فرانكفورت). البحث في بقية المسارات يحتاج مفتاح API محفوظًا بأمان في Cloudflare Worker.",
+              options: [], originAirport, destinationAirport
+            });
+          }
+
+          const target = new URL("https://api.navo24.com/v1/flight/flights");
           target.searchParams.set("from", originAirport.iataCode);
           target.searchParams.set("to", destinationAirport.iataCode);
           target.searchParams.set("date", date);
           target.searchParams.set("days", "1");
+          const headers = { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" };
+          if (navo24Key) headers.Authorization = "Bearer " + navo24Key;
           const response = await fetch(target.toString(), {
-            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+            headers,
             signal: AbortSignal.timeout(15000)
           });
           const payload = await response.json().catch(() => ({}));
+          const providerError = String(payload?.error?.code || "");
+          if (response.status === 401) {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
+              date, available: false, pricesAvailable: false,
+              code: "FLIGHT_PROVIDER_KEY_INVALID",
+              message: "مفتاح Navo24 غير صالح أو تم إلغاؤه. تحقق من مفتاح NAVO24_API_KEY في Cloudflare Worker.",
+              options: [], originAirport, destinationAirport
+            });
+          }
+          if (response.status === 403) {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
+              date, available: false, pricesAvailable: false,
+              code: "FLIGHT_PROVIDER_ACCESS_DENIED",
+              message: "حساب Navo24 أو المفتاح الحالي لا يملك صلاحية الوصول إلى جداول الرحلات.",
+              options: [], originAirport, destinationAirport
+            });
+          }
+          if (response.status === 402 || providerError === "INSUFFICIENT_CREDITS") {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
+              date, available: false, pricesAvailable: false,
+              code: "FLIGHT_PROVIDER_PAID_CREDITS_REQUIRED",
+              message: "مصدر جداول الرحلات رفض الطلب لعدم توفر رصيد كافٍ. لم يتم شراء رصيد أو تنفيذ أي عملية مدفوعة.",
+              options: [], originAirport, destinationAirport
+            });
+          }
           if (response.status === 429) {
             return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 schedules",
+              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
               date, available: false, pricesAvailable: false,
-              code: "FREE_SCHEDULE_QUOTA_REACHED",
-              message: "وصل مصدر جداول الرحلات المجاني إلى حد البحث الحالي. النتائج المحفوظة تظل متاحة حتى انتهاء التخزين المؤقت.",
+              code: "FLIGHT_PROVIDER_RATE_LIMITED",
+              message: "وصل مصدر جداول الرحلات إلى حد الطلبات المسموح به. حاول لاحقًا.",
               options: [], originAirport, destinationAirport
             });
           }
-          if (response.status === 404 || payload?.error?.code === "not_covered") {
+          if (response.status === 404 || providerError === "not_covered") {
             return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 schedules",
+              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
               date, available: false, pricesAvailable: false,
               code: "ROUTE_NOT_COVERED",
-              message: "المطارات معروفة، لكن مصدر الجداول المفتوح لا يغطي هذا المسار حاليًا.",
+              message: "المطارات معروفة، لكن مصدر الجداول لا يغطي هذا المسار حاليًا.",
               options: [], originAirport, destinationAirport
             });
           }
-          if (!response.ok) throw new Error("Navo24 schedule source HTTP " + response.status);
-          const flights = Array.isArray(payload) ? payload :
-            Array.isArray(payload.flights) ? payload.flights :
-            Array.isArray(payload.data) ? payload.data : [];
+          if (!response.ok) throw new Error("Navo24 flight schedule HTTP " + response.status);
+          const flights = Array.isArray(payload.data) ? payload.data : [];
           const options = flights.filter(item => item && item.cargo !== true).map(normalizeNavo24Flight)
             .filter(item => item.flightNumber && item.origin?.iataCode && item.destination?.iataCode)
             .sort((a, b) => String(a.departure).localeCompare(String(b.departure)));
