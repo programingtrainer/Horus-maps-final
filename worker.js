@@ -118,68 +118,77 @@ async function getAuthenticatedUser(request, env) {
 
 const SEARCH_USER_AGENT = "HorusMaps/0.1 (Android map search; https://github.com/programingtrainer/Horus-maps-final)";
 
-let amadeusCachedToken = null;
-let amadeusTokenExpiresAt = 0;
-
-async function getAmadeusAccessToken(env) {
-  const clientId = String(env.AMADEUS_CLIENT_ID || "");
-  const clientSecret = String(env.AMADEUS_CLIENT_SECRET || "");
-  if (!clientId || !clientSecret) {
-    const error = new Error("Flight search is not configured: add AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET Worker secrets.");
-    error.status = 503;
-    error.code = "FLIGHT_PROVIDER_NOT_CONFIGURED";
-    throw error;
-  }
-  if (amadeusCachedToken && Date.now() < amadeusTokenExpiresAt - 60000) return amadeusCachedToken;
-  const base = String(env.AMADEUS_BASE_URL || "https://api.amadeus.com").replace(/\/$/, "");
-  const response = await fetch(base + "/v1/security/oauth2/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
-    body: new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: clientId,
-      client_secret: clientSecret
-    }),
-    signal: AbortSignal.timeout(12000)
+async function findNearbyOpenAirports(latitude, longitude) {
+  const query = '[out:json][timeout:12];(nwr(around:300000,' + latitude + ',' + longitude + ')["aeroway"~"^(aerodrome|airport)$"]["iata"];);out center tags 100;';
+  const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": SEARCH_USER_AGENT,
+        "Accept": "application/json"
+      },
+      body: "data=" + encodeURIComponent(query),
+      signal: AbortSignal.timeout(14000)
+    });
+    if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
+    const payload = await response.json();
+    if (!Array.isArray(payload.elements)) throw new Error("Invalid airport data");
+    return payload.elements;
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.access_token) {
-    const error = new Error("Flight provider authentication failed.");
-    error.status = response.status === 401 ? 502 : 503;
-    throw error;
+  let elements;
+  try {
+    elements = await Promise.any(attempts);
+  } catch (error) {
+    throw new Error("تعذر تحميل بيانات المطارات المفتوحة حاليًا.");
   }
-  amadeusCachedToken = payload.access_token;
-  amadeusTokenExpiresAt = Date.now() + Math.max(60, Number(payload.expires_in) || 1800) * 1000;
-  return amadeusCachedToken;
+  const seen = new Set();
+  return elements.map(item => {
+    const tags = item.tags || {};
+    const iataCode = String(tags.iata || tags["iata:code"] || "").trim().toUpperCase();
+    const latitudeValue = Number(item.lat ?? item.center?.lat);
+    const longitudeValue = Number(item.lon ?? item.center?.lon);
+    if (!/^[A-Z]{3}$/.test(iataCode) || !Number.isFinite(latitudeValue) ||
+        !Number.isFinite(longitudeValue) || tags.access === "private" ||
+        tags.military === "yes" || seen.has(iataCode)) return null;
+    seen.add(iataCode);
+    return {
+      iataCode,
+      name: String(tags.name || tags["name:en"] || tags["name:ar"] || iataCode),
+      latitude: latitudeValue,
+      longitude: longitudeValue,
+      distanceMeters: Math.round(haversineMeters(latitude, longitude, latitudeValue, longitudeValue))
+    };
+  }).filter(Boolean).sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
 }
 
-async function findNearbyAirports(env, token, latitude, longitude) {
-  const base = String(env.AMADEUS_BASE_URL || "https://api.amadeus.com").replace(/\/$/, "");
-  const target = new URL(base + "/v1/reference-data/locations/airports");
-  target.searchParams.set("latitude", String(latitude));
-  target.searchParams.set("longitude", String(longitude));
-  target.searchParams.set("radius", "500");
-  target.searchParams.set("sort", "distance");
-  target.searchParams.set("page[limit]", "5");
-  const response = await fetch(target, {
-    headers: { "Authorization": "Bearer " + token, "Accept": "application/json" },
-    signal: AbortSignal.timeout(12000)
+function normalizeNavo24Flight(flight) {
+  const airport = value => value && ({
+    iataCode: String(value.iata || "").toUpperCase(),
+    name: String(value.name || value.city || value.iata || ""),
+    cityName: String(value.city || ""),
+    countryCode: String(value.country || ""),
+    latitude: Number.isFinite(Number(value.lat)) ? Number(value.lat) : null,
+    longitude: Number.isFinite(Number(value.lon)) ? Number(value.lon) : null
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error("Airport lookup failed (HTTP " + response.status + ").");
-  return (payload.data || []).filter(item =>
-    /^[A-Z]{3}$/.test(String(item.iataCode || "")) &&
-    Number.isFinite(Number(item.geoCode?.latitude)) &&
-    Number.isFinite(Number(item.geoCode?.longitude))
-  ).slice(0, 3).map(item => ({
-    iataCode: item.iataCode,
-    name: item.name || item.address?.cityName || item.iataCode,
-    cityName: item.address?.cityName || "",
-    countryCode: item.address?.countryCode || "",
-    latitude: Number(item.geoCode.latitude),
-    longitude: Number(item.geoCode.longitude),
-    distanceMeters: Math.round(haversineMeters(latitude, longitude, Number(item.geoCode.latitude), Number(item.geoCode.longitude)))
-  })).sort((a, b) => a.distanceMeters - b.distanceMeters);
+  const origin = airport(flight.origin);
+  const destination = airport(flight.destination);
+  return {
+    flightNumber: String(flight.flight_no || ""),
+    airline: String(flight.airline?.name || flight.airline?.iata || flight.airline?.icao || ""),
+    airlineIata: String(flight.airline?.iata || ""),
+    origin,
+    destination,
+    departure: String(flight.departure_utc || flight.time_local || ""),
+    arrival: String(flight.arrival_utc || ""),
+    timezone: String(flight.tz || ""),
+    stops: Math.max(0, Number(flight.stops) || 0),
+    via: Array.isArray(flight.via) ? flight.via.map(item => String(item.iata || item.name || "")).filter(Boolean) : [],
+    status: String(flight.status || ""),
+    updatedAt: String(flight.updated_at || ""),
+    source: String(flight.source || "Navo24"),
+    cargo: Boolean(flight.cargo)
+  };
 }
 
 const SEARCH_OVERPASS_ENDPOINTS = [
@@ -1519,83 +1528,103 @@ export default {
           return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
         }
         const date = String(body.date || "");
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < new Date().toISOString().slice(0, 10)) {
+        const parsedDate = new Date(date + "T00:00:00Z");
+        if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date) ||
+            Number.isNaN(parsedDate.getTime()) ||
+            parsedDate.toISOString().slice(0, 10) !== date ||
+            date < new Date().toISOString().slice(0, 10)) {
           return json({ ok: false, error: "حدد تاريخ سفر صحيحًا اليوم أو في المستقبل." }, 400);
         }
-        const token = await getAmadeusAccessToken(env);
-        const [origins, destinations] = await Promise.all([
-          findNearbyAirports(env, token, originLat, originLon),
-          findNearbyAirports(env, token, destinationLat, destinationLon)
-        ]);
-        if (!origins.length || !destinations.length) {
-          return json({ ok: true, provider: "Amadeus", date, available: false,
-            message: "لم نعثر على مطارات تجارية مناسبة بالقرب من إحدى النقطتين.", options: [] });
-        }
-        const base = String(env.AMADEUS_BASE_URL || "https://api.amadeus.com").replace(/\/$/, "");
-        const pairs = [];
-        for (const origin of origins) for (const destination of destinations) {
-          if (origin.iataCode !== destination.iataCode) pairs.push({ origin, destination });
-        }
-        const offers = await Promise.all(pairs.slice(0, 6).map(async pair => {
-          const target = new URL(base + "/v2/shopping/flight-offers");
-          target.searchParams.set("originLocationCode", pair.origin.iataCode);
-          target.searchParams.set("destinationLocationCode", pair.destination.iataCode);
-          target.searchParams.set("departureDate", date);
-          target.searchParams.set("adults", "1");
-          target.searchParams.set("max", "5");
-          const response = await fetch(target, {
-            headers: { "Authorization": "Bearer " + token, "Accept": "application/json" },
-            signal: AbortSignal.timeout(16000)
+
+        const cacheKey = [
+          "flight-schedules-v2",
+          originLat.toFixed(2), originLon.toFixed(2),
+          destinationLat.toFixed(2), destinationLon.toFixed(2), date
+        ].join(":");
+        return await cachedJson(env, cacheKey, 10800, async () => {
+          const [origins, destinations] = await Promise.all([
+            findNearbyOpenAirports(originLat, originLon),
+            findNearbyOpenAirports(destinationLat, destinationLon)
+          ]);
+          if (!origins.length || !destinations.length) {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + Navo24 schedules",
+              date, available: false, pricesAvailable: false,
+              message: "لم نعثر على مطار يحمل رمز IATA في بيانات المطارات المفتوحة بالقرب من إحدى النقطتين.",
+              options: [], originAirport: origins[0] || null, destinationAirport: destinations[0] || null
+            });
+          }
+
+          // Use the nearest public airports first. The schedule source has a small
+          // free-search allowance, so one route query is made per uncached search.
+          const originAirport = origins[0];
+          const destinationAirport = destinations.find(item => item.iataCode !== originAirport.iataCode);
+          if (!destinationAirport) {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + Navo24 schedules",
+              date, available: false, pricesAvailable: false,
+              message: "لم نعثر على مطارين مختلفين مناسبين للمسار المطلوب.",
+              options: [], originAirport, destinationAirport: null
+            });
+          }
+
+          const target = new URL("https://flight.navo24.com/api/v1/flights");
+          target.searchParams.set("from", originAirport.iataCode);
+          target.searchParams.set("to", destinationAirport.iataCode);
+          target.searchParams.set("date", date);
+          target.searchParams.set("days", "1");
+          const response = await fetch(target.toString(), {
+            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+            signal: AbortSignal.timeout(15000)
           });
           const payload = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            console.warn("[HorusFlights] Offer search HTTP", response.status);
-            return [];
+          if (response.status === 429) {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + Navo24 schedules",
+              date, available: false, pricesAvailable: false,
+              code: "FREE_SCHEDULE_QUOTA_REACHED",
+              message: "وصل مصدر جداول الرحلات المجاني إلى حد البحث الحالي. النتائج المحفوظة تظل متاحة حتى انتهاء التخزين المؤقت.",
+              options: [], originAirport, destinationAirport
+            });
           }
-          return (payload.data || []).map(offer => {
-            const itinerary = offer.itineraries?.[0] || {};
-            const segments = (itinerary.segments || []).map(segment => ({
-              carrier: segment.carrierCode || "",
-              flightNumber: segment.number || "",
-              from: segment.departure?.iataCode || "",
-              to: segment.arrival?.iataCode || "",
-              departure: segment.departure?.at || "",
-              arrival: segment.arrival?.at || "",
-              duration: segment.duration || ""
-            }));
-            const airDistanceMeters = Math.round(haversineMeters(
-              pair.origin.latitude, pair.origin.longitude,
-              pair.destination.latitude, pair.destination.longitude
-            ));
-            const estimatedFlightDurationSeconds = Math.round((airDistanceMeters / 1000 / 800) * 3600 + 45 * 60);
-            return {
-              id: String(offer.id || ""),
-              origin: pair.origin,
-              destination: pair.destination,
-              airDistanceMeters,
-              estimatedFlightDurationSeconds,
-              duration: itinerary.duration || "",
-              stops: Math.max(0, segments.length - 1),
-              currency: offer.price?.currency || "",
-              price: offer.price?.grandTotal || offer.price?.total || "",
-              segments
-            };
+          if (response.status === 404 || payload?.error?.code === "not_covered") {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + Navo24 schedules",
+              date, available: false, pricesAvailable: false,
+              code: "ROUTE_NOT_COVERED",
+              message: "المطارات معروفة، لكن مصدر الجداول المفتوح لا يغطي هذا المسار حاليًا.",
+              options: [], originAirport, destinationAirport
+            });
+          }
+          if (!response.ok) throw new Error("Navo24 schedule source HTTP " + response.status);
+          const flights = Array.isArray(payload) ? payload :
+            Array.isArray(payload.flights) ? payload.flights :
+            Array.isArray(payload.data) ? payload.data : [];
+          const options = flights.filter(item => item && item.cargo !== true).map(normalizeNavo24Flight)
+            .filter(item => item.flightNumber && item.origin?.iataCode && item.destination?.iataCode)
+            .sort((a, b) => String(a.departure).localeCompare(String(b.departure)));
+          return json({
+            ok: true,
+            provider: "OpenStreetMap airport data + Navo24 (free schedule feed)",
+            date,
+            available: options.length > 0,
+            pricesAvailable: false,
+            message: options.length
+              ? "هذه مواعيد جداول منشورة وليست عروض أسعار أو تأكيدًا لتوفر المقاعد. تحقق من شركة الطيران قبل السفر."
+              : "لم يعثر مصدر الجداول المفتوح على رحلات منشورة لهذا المسار والتاريخ.",
+            originAirport,
+            destinationAirport,
+            options
           });
-        }));
-        const options = offers.flat().sort((a, b) => Number(a.price) - Number(b.price)).slice(0, 10);
-        return json({
-          ok: true, provider: "Amadeus", date, available: options.length > 0,
-          message: options.length ? null : "لم نعثر على عروض طيران متاحة من المطارات القريبة في التاريخ المحدد.",
-          options
         });
       } catch (error) {
-        console.error("[HorusFlights] Search failed", String(error?.message || error).slice(0, 160));
+        console.error("[HorusFlights] Open flight search failed", String(error?.message || error).slice(0, 160));
         return json({
           ok: false,
-          providerConfigured: error?.code !== "FLIGHT_PROVIDER_NOT_CONFIGURED",
-          code: error?.code || "FLIGHT_SEARCH_FAILED",
+          provider: "OpenStreetMap airport data + Navo24 schedules",
+          code: "FLIGHT_SEARCH_FAILED",
           error: error?.message || "تعذر البحث عن رحلات الطيران الآن."
-        }, Number(error?.status) || 503);
+        }, 503);
       }
     }
 
