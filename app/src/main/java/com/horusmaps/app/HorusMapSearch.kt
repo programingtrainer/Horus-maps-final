@@ -129,6 +129,13 @@ data class HorusRouteStep(
     val longitude: Double
 )
 
+data class HorusTransportSearchResult(
+    val provider: String,
+    val available: Boolean,
+    val message: String?,
+    val options: List<String>
+)
+
 data class HorusRouteResult(
     val mode: String,
     val distanceMeters: Int,
@@ -296,6 +303,68 @@ object HorusMapSearchApi {
                 }
             }
         }
+
+
+    suspend fun searchTransit(
+        originLatitude: Double, originLongitude: Double,
+        destinationLatitude: Double, destinationLongitude: Double,
+        date: String, time: String
+    ): HorusTransportSearchResult = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("originLatitude", originLatitude).put("originLongitude", originLongitude)
+            .put("destinationLatitude", destinationLatitude).put("destinationLongitude", destinationLongitude)
+            .put("date", date).put("time", time)
+        val root = JSONObject(post("$BASE_URL/transit", body))
+        if (!root.optBoolean("ok")) throw IllegalStateException(root.optString("error", "تعذر البحث عن القطارات."))
+        val options = root.optJSONArray("options") ?: JSONArray()
+        val lines = buildList {
+            for (index in 0 until options.length()) {
+                val option = options.optJSONObject(index) ?: continue
+                val durationMinutes = (option.optInt("durationSeconds") / 60).coerceAtLeast(1)
+                add("الخيار ${index + 1} • ${durationMinutes} دقيقة • ${option.optInt("transfers")} تبديل")
+                val legs = option.optJSONArray("legs") ?: JSONArray()
+                for (legIndex in 0 until legs.length()) {
+                    val leg = legs.optJSONObject(legIndex) ?: continue
+                    add(listOf(leg.optString("mode"), leg.optString("agencyName"), leg.optString("routeName"),
+                        "${leg.optString("from")} ← ${leg.optString("to")}",
+                        "${leg.optString("departure")} - ${leg.optString("arrival")}")
+                        .filter { it.isNotBlank() }.joinToString(" • "))
+                }
+            }
+        }
+        HorusTransportSearchResult(root.optString("provider", "Transitland"), root.optBoolean("available"),
+            root.optString("message").takeIf { it.isNotBlank() && it != "null" }, lines)
+    }
+
+    suspend fun searchFlights(
+        originLatitude: Double, originLongitude: Double,
+        destinationLatitude: Double, destinationLongitude: Double,
+        date: String
+    ): HorusTransportSearchResult = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("originLatitude", originLatitude).put("originLongitude", originLongitude)
+            .put("destinationLatitude", destinationLatitude).put("destinationLongitude", destinationLongitude)
+            .put("date", date)
+        val root = JSONObject(post("$BASE_URL/flights", body))
+        if (!root.optBoolean("ok")) throw IllegalStateException(root.optString("error", "تعذر البحث عن الطيران."))
+        val options = root.optJSONArray("options") ?: JSONArray()
+        val lines = buildList {
+            for (index in 0 until options.length()) {
+                val option = options.optJSONObject(index) ?: continue
+                val origin = option.optJSONObject("origin") ?: JSONObject()
+                val destination = option.optJSONObject("destination") ?: JSONObject()
+                add("الخيار ${index + 1} • ${option.optString("price")} ${option.optString("currency")} • ${option.optString("duration")} • ${option.optInt("stops")} توقف")
+                add("${origin.optString("name")} (${origin.optString("iataCode")}) ← ${destination.optString("name")} (${destination.optString("iataCode")})")
+                val segments = option.optJSONArray("segments") ?: JSONArray()
+                for (segmentIndex in 0 until segments.length()) {
+                    val segment = segments.optJSONObject(segmentIndex) ?: continue
+                    add("${segment.optString("carrier")}${segment.optString("flightNumber")}: ${segment.optString("from")} → ${segment.optString("to")} • ${segment.optString("departure")} - ${segment.optString("arrival")}")
+                }
+            }
+        }
+        HorusTransportSearchResult(root.optString("provider", "Amadeus"), root.optBoolean("available"),
+            root.optString("message").takeIf { it.isNotBlank() && it != "null" }, lines)
+    }
 
     suspend fun route(
         originLatitude: Double,
