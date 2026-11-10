@@ -328,10 +328,21 @@ object HorusMapSearchApi {
                 val legs = option.optJSONArray("legs") ?: JSONArray()
                 for (legIndex in 0 until legs.length()) {
                     val leg = legs.optJSONObject(legIndex) ?: continue
-                    add(listOf(leg.optString("mode"), leg.optString("agencyName"), leg.optString("routeName"),
-                        "${leg.optString("from")} ← ${leg.optString("to")}",
-                        "${leg.optString("departure")} - ${leg.optString("arrival")}")
-                        .filter { it.isNotBlank() }.joinToString(" • "))
+                    val departure = leg.optString("departure").ifBlank { leg.optString("scheduledDeparture") }
+                    val arrival = leg.optString("arrival").ifBlank { leg.optString("scheduledArrival") }
+                    val status = when {
+                        leg.optBoolean("cancelled") -> "ملغاة"
+                        leg.optBoolean("realTime") -> "تحديث مباشر"
+                        else -> "حسب الجدول"
+                    }
+                    add(listOf(
+                        leg.optString("mode"),
+                        leg.optString("agencyName"),
+                        leg.optString("routeName"),
+                        "${leg.optString("from")} → ${leg.optString("to")}",
+                        "$departure - $arrival",
+                        status
+                    ).filter { it.isNotBlank() }.joinToString(" • "))
                 }
             }
         }
