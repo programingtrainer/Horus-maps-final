@@ -465,6 +465,12 @@ object HorusMapSearchApi {
                 add("الرحلة ${index + 1} • $flightNumber • $airline")
                 add("$from → $to • المغادرة: $departure • الوصول: ${arrival.ifBlank { "غير متاح" }}")
                 add("عدد التوقفات: ${option.optInt("stops")} • المصدر: ${option.optString("source", "Navo24")}")
+                val durationSeconds = option.optLong("durationSeconds", 0L)
+                if (durationSeconds > 0L) {
+                    val totalMinutes = durationSeconds / 60
+                    val durationLabel = if (totalMinutes >= 60) "${totalMinutes / 60} ساعة و ${totalMinutes % 60} دقيقة" else "${totalMinutes} دقيقة"
+                    add("مدة الرحلة المجدولة: $durationLabel")
+                }
                 val via = option.optJSONArray("via") ?: JSONArray()
                 if (via.length() > 0) {
                     add("محطات التوقف: " + (0 until via.length()).joinToString("، ") { via.optString(it) })
