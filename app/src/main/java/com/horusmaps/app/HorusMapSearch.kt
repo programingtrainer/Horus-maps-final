@@ -117,12 +117,25 @@ data class HorusNearbyPlace(
 
 data class HorusCountryInfo(val code: String, val name: String)
 
+data class HorusRouteStep(
+    val type: String,
+    val modifier: String,
+    val name: String,
+    val instruction: String,
+    val distanceFromStartMeters: Int,
+    val distanceMeters: Int,
+    val durationSeconds: Int,
+    val latitude: Double,
+    val longitude: Double
+)
+
 data class HorusRouteResult(
     val mode: String,
     val distanceMeters: Int,
     val durationSeconds: Int,
     val geometryGeoJson: String,
-    val provider: String
+    val provider: String,
+    val steps: List<HorusRouteStep>
 )
 
 object HorusMapSearchApi {
@@ -306,12 +319,33 @@ object HorusMapSearchApi {
         }
         val geometry = root.optJSONObject("geometry")
             ?: throw IllegalStateException("لم تصل بيانات مسار صالحة.")
+        val stepArray = root.optJSONArray("steps") ?: JSONArray()
+        val routeSteps = buildList {
+            for (index in 0 until stepArray.length()) {
+                val item = stepArray.optJSONObject(index) ?: continue
+                val latitude = item.optDouble("latitude", Double.NaN)
+                val longitude = item.optDouble("longitude", Double.NaN)
+                if (!latitude.isFinite() || !longitude.isFinite()) continue
+                add(HorusRouteStep(
+                    type = item.optString("type", "continue"),
+                    modifier = item.optString("modifier"),
+                    name = item.optString("name"),
+                    instruction = item.optString("instruction"),
+                    distanceFromStartMeters = item.optInt("distanceFromStartMeters", 0),
+                    distanceMeters = item.optInt("distanceMeters", 0),
+                    durationSeconds = item.optInt("durationSeconds", 0),
+                    latitude = latitude,
+                    longitude = longitude
+                ))
+            }
+        }
         HorusRouteResult(
             mode = root.optString("mode", mode),
             distanceMeters = root.optInt("distanceMeters", 0),
             durationSeconds = root.optInt("durationSeconds", 0),
             geometryGeoJson = geometry.toString(),
-            provider = root.optString("provider")
+            provider = root.optString("provider"),
+            steps = routeSteps
         )
     }
 
