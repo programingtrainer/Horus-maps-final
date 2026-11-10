@@ -1619,6 +1619,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     travelDate = travelDate,
+                                    travelTime = travelTime,
                                     transportLoading = transportLoading,
                                     transportMessage = transportSearchError ?: transportSearchResult?.message,
                                     transportOptions = transportSearchResult?.options.orEmpty(),
