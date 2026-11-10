@@ -781,6 +781,7 @@ class MainActivity : ComponentActivity() {
                 var transportSearchJob by remember { mutableStateOf<Job?>(null) }
                 var transportSearchResult by remember { mutableStateOf<HorusTransportSearchResult?>(null) }
                 var transportSearchError by remember { mutableStateOf<String?>(null) }
+                var bookingLoadingId by remember { mutableStateOf<String?>(null) }
                 var travelDate by remember {
                     mutableStateOf(java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().apply { add(Calendar.DAY_OF_MONTH, 1) }.time))
                 }
@@ -1799,6 +1800,32 @@ class MainActivity : ComponentActivity() {
                                     flightItineraryMessage = flightItineraryMessage,
                                     onConfirmTrainArrival = { confirmReachedArrivalStation() },
                                     onConfirmFlightArrival = { confirmReachedArrivalAirport() },
+                                    onGetBookingLinks = { offer ->
+                                        if (bookingLoadingId == null && offer.ignavId.isNotBlank()) {
+                                            bookingLoadingId = offer.ignavId
+                                            accountScope.launch {
+                                                try {
+                                                    val bookingUrl = HorusMapSearchApi.bookingLink(offer.ignavId)
+                                                    if (!bookingUrl.isNullOrBlank()) {
+                                                        startActivity(
+                                                            android.content.Intent(
+                                                                android.content.Intent.ACTION_VIEW,
+                                                                android.net.Uri.parse(bookingUrl)
+                                                            )
+                                                        )
+                                                        transportSearchError = null
+                                                    } else {
+                                                        transportSearchError = "لم يوفر مزود الحجز رابطًا صالحًا لهذا العرض حاليًا."
+                                                    }
+                                                } catch (error: Exception) {
+                                                    transportSearchError = error.message ?: "تعذر جلب روابط الحجز."
+                                                } finally {
+                                                    bookingLoadingId = null
+                                                }
+                                            }
+                                        }
+                                    },
+                                    bookingLoadingId = bookingLoadingId,
                                     onSearchTransport = { searchSelectedTransport() },
                                     onPickDate = { chooseTravelDate() },
                                     allowIntercityModes = navigationDestination?.isLocalPlace != true && intercityStage == "none",
