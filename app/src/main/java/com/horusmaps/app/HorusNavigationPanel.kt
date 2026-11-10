@@ -58,7 +58,7 @@ fun HorusNavigationPanel(
                 Text(destination.address, color = Color(0xFF667085), fontSize = 11.sp, maxLines = 2)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("driving" to "🚗 سيارة", "walking" to "🚶 مشي", "transit" to "🚆 قطار", "flight" to "✈ طيران").forEach { (mode, label) ->
+                listOf("driving" to "سيارة", "walking" to "مشي", "transit" to "قطار", "flight" to "طيران").forEach { (mode, label) ->
                     val selected = selectedMode == mode
                     Text(
                         text = label,
