@@ -1596,7 +1596,8 @@ export default {
           target.searchParams.set("Limit", "10");
           const response = await fetch(target.toString(), {
             headers: {
-              "Subscription-Key": oagKey,\n              "Ocp-Apim-Subscription-Key": oagKey,
+              "Subscription-Key": oagKey,
+              "Ocp-Apim-Subscription-Key": oagKey,
               "Accept": "application/json",
               "User-Agent": SEARCH_USER_AGENT
             },
