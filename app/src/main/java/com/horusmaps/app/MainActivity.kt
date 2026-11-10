@@ -763,6 +763,8 @@ class MainActivity : ComponentActivity() {
                 var intercityFinalDestination by remember { mutableStateOf<HorusNavigationDestination?>(null) }
                 var intercityArrivalStation by remember { mutableStateOf<HorusTransitStation?>(null) }
                 var intercityStage by remember { mutableStateOf("none") }
+                var intercityItineraryLines by remember { mutableStateOf<List<String>>(emptyList()) }
+                var intercityItineraryMessage by remember { mutableStateOf<String?>(null) }
                 var selectedTravelMode by remember { mutableStateOf("driving") }
                 var calculatedRoute by remember { mutableStateOf<HorusRouteResult?>(null) }
                 var routeCoordinates by remember { mutableStateOf<List<LatLng>>(emptyList()) }
@@ -1207,17 +1209,26 @@ class MainActivity : ComponentActivity() {
                     intercityFinalDestination = null
                     intercityArrivalStation = null
                     intercityStage = "none"
+                    intercityItineraryLines = emptyList()
+                    intercityItineraryMessage = null
                     navigationError = null
                     routeLoading = false
                 }
 
                 fun routeToOriginStation(station: HorusTransitStation) {
                     val finalDestination = navigationDestination ?: return
-                    val arrivalStation = transportSearchResult?.destinationStations?.firstOrNull()
+                    val transitResult = transportSearchResult
+                    if (transitResult?.available != true || transitResult.options.isEmpty()) {
+                        navigationError = transitResult?.message ?: "ابحث عن جدول قطار متاح قبل التوجه إلى محطة الانطلاق."
+                        return
+                    }
+                    val arrivalStation = transitResult.destinationStations.firstOrNull()
                     if (arrivalStation == null) {
                         navigationError = "لا توجد محطة وصول محددة للوجهة؛ لا يمكن تجهيز رحلة قطار كاملة."
                         return
                     }
+                    intercityItineraryLines = transitResult.options
+                    intercityItineraryMessage = transitResult.message
                     intercityFinalDestination = finalDestination
                     intercityArrivalStation = arrivalStation
                     intercityStage = "to_origin_station"
@@ -1262,6 +1273,8 @@ class MainActivity : ComponentActivity() {
                     intercityStage = "none"
                     intercityFinalDestination = null
                     intercityArrivalStation = null
+                    intercityItineraryLines = emptyList()
+                    intercityItineraryMessage = null
                     navigationDestination = finalDestination
                     selectedTravelMode = "driving"
                     transportSearchJob?.cancel()
@@ -1704,6 +1717,8 @@ class MainActivity : ComponentActivity() {
                                     destinationStations = transportSearchResult?.destinationStations.orEmpty(),
                                     onRouteToOriginStation = { station -> routeToOriginStation(station) },
                                     waitingForTrainArrival = intercityStage == "waiting_train",
+                                    intercityItineraryLines = intercityItineraryLines,
+                                    intercityItineraryMessage = intercityItineraryMessage,
                                     onConfirmTrainArrival = { confirmReachedArrivalStation() },
                                     onSearchTransport = { searchSelectedTransport() },
                                     onPickDate = { chooseTravelDate() },
