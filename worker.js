@@ -173,14 +173,20 @@ function normalizeNavo24Flight(flight) {
   });
   const origin = airport(flight.origin);
   const destination = airport(flight.destination);
+  const departureUtc = String(flight.departure_utc || "");
+  const arrivalUtc = String(flight.arrival_utc || "");
+  const durationSeconds = departureUtc && arrivalUtc
+    ? Math.max(0, Math.round((Date.parse(arrivalUtc) - Date.parse(departureUtc)) / 1000))
+    : 0;
   return {
     flightNumber: String(flight.flight_no || ""),
     airline: String(flight.airline?.name || flight.airline?.iata || flight.airline?.icao || ""),
     airlineIata: String(flight.airline?.iata || ""),
     origin,
     destination,
-    departure: String(flight.departure_utc || flight.time_local || ""),
-    arrival: String(flight.arrival_utc || ""),
+    departure: departureUtc || String(flight.time_local || ""),
+    arrival: arrivalUtc,
+    durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : 0,
     timezone: String(flight.tz || ""),
     stops: Math.max(0, Number(flight.stops) || 0),
     via: Array.isArray(flight.via) ? flight.via.map(item => String(item.iata || item.name || "")).filter(Boolean) : [],
