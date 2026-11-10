@@ -1452,15 +1452,6 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        if (navigationStarted && navigationProgress != null) {
-                            HorusNavigationProgressCard(
-                                remainingMeters = navigationProgress!!.remainingMeters,
-                                remainingSeconds = navigationProgress!!.remainingSeconds,
-                                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
-                                    .padding(top = 74.dp).fillMaxWidth(0.90f)
-                            )
-                        }
-
                         HorusMapSearchPanel(
                             query = searchQuery,
                             onQueryChange = { value ->
@@ -1500,6 +1491,15 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
                                 .padding(start = 12.dp, end = 78.dp, top = 8.dp)
                         )
+
+                        if (navigationStarted && navigationProgress != null) {
+                            HorusNavigationProgressCard(
+                                remainingMeters = navigationProgress!!.remainingMeters,
+                                remainingSeconds = navigationProgress!!.remainingSeconds,
+                                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                                    .padding(top = 74.dp).fillMaxWidth(0.90f)
+                            )
+                        }
 
                         // MapLibre-style plain wordmark in the lower-right corner (no badge or info icon).
                         Text(
