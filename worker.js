@@ -1387,12 +1387,13 @@ export default {
             const geometry = leg.legGeometry || {};
             const encoded = geometry.points || geometry.encodedPolyline || "";
             if (!encoded) continue;
+            const precision = Number(geometry.precision) || 6;
             let decoded = [];
             try {
-              decoded = decodePolyline(encoded, 6);
-              if (decoded.length < 2) decoded = decodePolyline(encoded, 5);
+              decoded = decodePolyline(encoded, precision);
+              if (decoded.length < 2 && precision !== 5) decoded = decodePolyline(encoded, 5);
             } catch {
-              try { decoded = decodePolyline(encoded, 5); } catch {}
+              try { decoded = decodePolyline(encoded, precision === 5 ? 6 : 5); } catch {}
             }
             if (coordinates.length && decoded.length &&
                 coordinates[coordinates.length - 1][0] === decoded[0][0] &&
