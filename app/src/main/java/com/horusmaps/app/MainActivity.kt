@@ -1783,6 +1783,8 @@ class MainActivity : ComponentActivity() {
                                     transportLoading = transportLoading,
                                     transportMessage = transportSearchError ?: transportSearchResult?.message,
                                     transportOptions = transportSearchResult?.options.orEmpty(),
+                                    priceMessage = transportSearchResult?.priceMessage,
+                                    priceOffers = transportSearchResult?.priceOffers.orEmpty(),
                                     originStations = transportSearchResult?.originStations.orEmpty(),
                                     destinationStations = transportSearchResult?.destinationStations.orEmpty(),
                                     onRouteToOriginStation = { station -> routeToOriginStation(station) },
