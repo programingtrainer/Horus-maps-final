@@ -1285,7 +1285,7 @@ class MainActivity : ComponentActivity() {
                 }
 
 
-                fun searchSelectedTransport(mode: String = selectedTravelMode) {
+                fun searchSelectedTransport(mode: String = selectedTravelMode, dateOverride: String = travelDate) {
                     val destination = navigationDestination ?: return
                     val map = mapLibreMap ?: return
                     val origin = bestKnownLocation(map)
@@ -1311,7 +1311,7 @@ class MainActivity : ComponentActivity() {
                                 HorusMapSearchApi.searchFlights(
                                     origin.latitude, origin.longitude,
                                     destination.latitude, destination.longitude,
-                                    travelDate
+                                    dateOverride
                                 )
                             }
                             if (selectedTravelMode == mode) transportSearchResult = result
@@ -1336,8 +1336,9 @@ class MainActivity : ComponentActivity() {
                     DatePickerDialog(
                         this@MainActivity,
                         { _, year, month, day ->
-                            travelDate = String.format(Locale.US, "%04d-%02d-%02d", year, month + 1, day)
-                            if (selectedTravelMode == "flight") searchSelectedTransport("flight")
+                            val selectedDate = String.format(Locale.US, "%04d-%02d-%02d", year, month + 1, day)
+                            travelDate = selectedDate
+                            if (selectedTravelMode == "flight") searchSelectedTransport("flight", selectedDate)
                         },
                         calendar.get(Calendar.YEAR),
                         calendar.get(Calendar.MONTH),
