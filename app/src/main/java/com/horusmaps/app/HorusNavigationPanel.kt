@@ -20,6 +20,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -50,6 +51,8 @@ fun HorusNavigationPanel(
     transportLoading: Boolean = false,
     transportMessage: String? = null,
     transportOptions: List<String> = emptyList(),
+    priceMessage: String? = null,
+    priceOffers: List<HorusPriceOffer> = emptyList(),
     onSearchTransport: () -> Unit = {},
     onPickDate: () -> Unit = {},
     allowIntercityModes: Boolean = true,
@@ -69,6 +72,7 @@ fun HorusNavigationPanel(
     onConfirmFlightArrival: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val uriHandler = LocalUriHandler.current
     Surface(
         modifier = modifier.fillMaxWidth(0.94f),
         shape = RoundedCornerShape(22.dp),
@@ -185,6 +189,46 @@ fun HorusNavigationPanel(
                     ) {
                         transportOptions.take(12).forEach { line ->
                             Text(line, color = Color(0xFF344054), fontSize = 10.sp, lineHeight = 15.sp)
+                        }
+                    }
+                }
+                if (selectedMode == "flight") {
+                    if (!priceMessage.isNullOrBlank()) {
+                        Text(priceMessage, color = Color(0xFF667085), fontSize = 10.sp, lineHeight = 14.sp)
+                    }
+                    if (priceOffers.isNotEmpty()) {
+                        Text("أسعار استرشادية حديثة", color = Color(0xFF172B45), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        priceOffers.take(5).forEach { offer ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = String.format(java.util.Locale.US, "%.2f %s", offer.price, offer.currency) +
+                                            if (offer.airlineIata.isNotBlank()) " • ${offer.airlineIata}" else "",
+                                        color = Color(0xFF172B45), fontSize = 12.sp, fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = listOfNotNull(
+                                            offer.flightNumber.takeIf { it.isNotBlank() },
+                                            offer.departureAt.takeIf { it.isNotBlank() },
+                                            "توقفات: ${offer.stops}"
+                                        ).joinToString(" • "),
+                                        color = Color(0xFF667085), fontSize = 10.sp
+                                    )
+                                    if (offer.foundAt.isNotBlank()) {
+                                        Text("آخر رصد: ${offer.foundAt}", color = Color(0xFF98A2B3), fontSize = 9.sp)
+                                    }
+                                }
+                                if (offer.bookingUrl.isNotBlank()) {
+                                    Button(
+                                        onClick = { runCatching { uriHandler.openUri(offer.bookingUrl) } },
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16834A))
+                                    ) { Text("عرض السعر", fontSize = 10.sp) }
+                                }
+                            }
                         }
                     }
                 }
