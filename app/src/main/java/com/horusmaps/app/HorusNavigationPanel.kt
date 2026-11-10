@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -41,6 +44,12 @@ fun HorusNavigationPanel(
     onCalculate: () -> Unit,
     onStart: () -> Unit,
     onCancel: () -> Unit,
+    travelDate: String = "",
+    transportLoading: Boolean = false,
+    transportMessage: String? = null,
+    transportOptions: List<String> = emptyList(),
+    onSearchTransport: () -> Unit = {},
+    onPickDate: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -76,18 +85,38 @@ fun HorusNavigationPanel(
                     )
                 }
             }
-            if (selectedMode == "transit") {
-                Text(
-                    "مسارات القطارات تعتمد على توفر جداول ومعلومات النقل العام في المنطقة، ولم نفعّل مصدرًا موثوقًا لها بعد.",
-                    color = Color(0xFF667085),
-                    fontSize = 10.sp
-                )
-            } else if (selectedMode == "flight") {
-                Text(
-                    "الطيران سيُعرض كتقدير للمسافة والوقت الجوي، وليس كمسار ملاحة على الطرق.",
-                    color = Color(0xFF667085),
-                    fontSize = 10.sp
-                )
+            if (selectedMode == "transit" || selectedMode == "flight") {
+                if (selectedMode == "flight") {
+                    Text(
+                        "تاريخ المغادرة: $travelDate",
+                        modifier = Modifier.clickable(onClick = onPickDate).padding(vertical = 4.dp),
+                        color = Color(0xFF1769C2), fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                    )
+                } else {
+                    Text("سيتم البحث عن الرحلات المتاحة حسب التوقيت المحلي الحالي.", color = Color(0xFF667085), fontSize = 10.sp)
+                }
+                Button(
+                    onClick = onSearchTransport,
+                    enabled = !transportLoading,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087FE5))
+                ) {
+                    Text(if (transportLoading) "جارٍ البحث عن الرحلات..." else if (selectedMode == "transit") "ابحث عن القطارات والانتقالات" else "ابحث عن رحلات الطيران")
+                }
+                if (!transportMessage.isNullOrBlank()) {
+                    Text(transportMessage, color = if (transportOptions.isEmpty()) Color(0xFFB54708) else Color(0xFF475467), fontSize = 11.sp)
+                }
+                if (transportOptions.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.heightIn(max = 190.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        transportOptions.take(12).forEach { line ->
+                            Text(line, color = Color(0xFF344054), fontSize = 10.sp, lineHeight = 15.sp)
+                        }
+                    }
+                }
             }
             if (route != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
