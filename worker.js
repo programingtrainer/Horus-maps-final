@@ -159,7 +159,7 @@ function geographicQueryVariants(query) {
   // Keep the original phrase first, then try the place name without a generic
   // Arabic/English feature prefix. This helps village, lane, school and street
   // searches where the provider indexes the proper name separately.
-  const stripped = raw.replace(/^(?:(?:قرية|القرية|نجع|عزبة|شارع|طريق|حي|حارة|مدرسة|جامعة|village|street|road|school|university)\\s+)/iu, "").trim();
+  const stripped = raw.replace(/^(?:(?:قرية|القرية|نجع|عزبة|شارع|طريق|حي|حارة|مدرسة|جامعة|village|street|road|school|university)\s+)/iu, "").trim();
   const candidates = canonical ? [canonical, raw, stripped] : [raw, stripped];
   return [...new Set(candidates.map(value => String(value || "").trim()).filter(value => value.length >= 2))].slice(0, 4);
 }
