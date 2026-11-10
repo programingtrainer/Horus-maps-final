@@ -1295,7 +1295,7 @@ export default {
         // Provider-neutral public-transport routing. Transitous runs MOTIS and
         // aggregates openly published GTFS/NeTEx schedules and GTFS-RT/SIRI data.
         const departureInput = String(body.departureTime || "");
-        const departure = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:Z|[+-]\\d{2}:\\d{2})$/.test(departureInput)
+        const departure = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(departureInput)
           ? departureInput : new Date().toISOString();
         const target = new URL("https://api.transitous.org/api/v6/plan");
         target.searchParams.set("fromPlace", originLat + "," + originLon);
