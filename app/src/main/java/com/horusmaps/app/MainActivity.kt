@@ -90,6 +90,8 @@ import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.Marker
 import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.annotations.Polyline
+import org.maplibre.android.annotations.PolylineOptions
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.sources.GeoJsonSource
@@ -623,6 +625,13 @@ class MainActivity : ComponentActivity() {
                 var selectedSearchCategory by remember { mutableStateOf<HorusSearchCategory?>(null) }
                 var geographySearchResults by remember { mutableStateOf<List<HorusGeoSearchResult>>(emptyList()) }
                 var nearbySearchResults by remember { mutableStateOf<List<HorusNearbyPlace>>(emptyList()) }
+                var navigationDestination by remember { mutableStateOf<HorusNavigationDestination?>(null) }
+                var selectedTravelMode by remember { mutableStateOf("driving") }
+                var calculatedRoute by remember { mutableStateOf<HorusRouteResult?>(null) }
+                var routePolyline by remember { mutableStateOf<Polyline?>(null) }
+                var routeLoading by remember { mutableStateOf(false) }
+                var navigationStarted by remember { mutableStateOf(false) }
+                var navigationError by remember { mutableStateOf<String?>(null) }
 
                 fun activateAccount(
                     email: String,
@@ -1027,19 +1036,110 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                fun clearCalculatedRoute() {
+                    mapLibreMap?.let { map -> routePolyline?.let { runCatching { map.removeAnnotation(it) } } }
+                    routePolyline = null
+                    calculatedRoute = null
+                    navigationStarted = false
+                }
+
+                fun cancelNavigation() {
+                    clearCalculatedRoute()
+                    navigationDestination = null
+                    navigationError = null
+                    routeLoading = false
+                }
+
                 fun selectGeographyResult(result: HorusGeoSearchResult) {
+                    clearCalculatedRoute()
+                    navigationDestination = HorusNavigationDestination(
+                        name = result.name,
+                        address = result.displayName,
+                        latitude = result.latitude,
+                        longitude = result.longitude
+                    )
                     mapLibreMap?.let { focusSearchResult(it, result) }
                     searchExpanded = false
                     searchError = null
+                    navigationError = null
                 }
 
                 fun selectNearbyResult(result: HorusNearbyPlace) {
+                    clearCalculatedRoute()
+                    navigationDestination = HorusNavigationDestination(
+                        name = result.name,
+                        address = listOf(result.address, result.region, result.country).filter { it.isNotBlank() }.distinct().joinToString("، "),
+                        latitude = result.latitude,
+                        longitude = result.longitude
+                    )
                     mapLibreMap?.let { map ->
                         map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 16.5), 900)
                         showSearchMarker(map, result.latitude, result.longitude, result.name)
                     }
                     searchExpanded = false
                     searchError = null
+                    navigationError = null
+                }
+
+                fun calculateSelectedRoute() {
+                    val destination = navigationDestination ?: return
+                    val map = mapLibreMap ?: return
+                    val origin = bestKnownLocation(map)
+                    if (origin == null) {
+                        navigationError = "اسمح للتطبيق بالوصول إلى موقعك الحالي لتحديد نقطة البداية."
+                        requestOrLocate()
+                        return
+                    }
+                    routeLoading = true
+                    navigationError = null
+                    accountScope.launch {
+                        try {
+                            val result = HorusMapSearchApi.route(
+                                origin.latitude,
+                                origin.longitude,
+                                destination.latitude,
+                                destination.longitude,
+                                selectedTravelMode
+                            )
+                            val coordinates = org.json.JSONArray(result.geometryGeoJson)
+                                .getJSONArray("coordinates")
+                            val points = buildList {
+                                for (index in 0 until coordinates.length()) {
+                                    val pair = coordinates.optJSONArray(index) ?: continue
+                                    if (pair.length() < 2) continue
+                                    add(LatLng(pair.getDouble(1), pair.getDouble(0)))
+                                }
+                            }
+                            if (points.size < 2) throw IllegalStateException("لم يصل مسار صالح من خدمة الملاحة.")
+                            routePolyline?.let { runCatching { map.removeAnnotation(it) } }
+                            routePolyline = map.addPolyline(
+                                PolylineOptions()
+                                    .addAll(points)
+                                    .color(android.graphics.Color.rgb(25, 118, 210))
+                                    .width(6f)
+                            )
+                            calculatedRoute = result
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            navigationError = error.message ?: "تعذر حساب الطريق. حاول مرة أخرى."
+                            calculatedRoute = null
+                        } finally {
+                            routeLoading = false
+                        }
+                    }
+                }
+
+                fun beginNavigation() {
+                    if (calculatedRoute == null) return
+                    navigationStarted = true
+                    mapLibreMap?.let { map ->
+                        runCatching {
+                            if (map.locationComponent.isLocationComponentActivated) {
+                                map.locationComponent.cameraMode = CameraMode.TRACKING
+                            }
+                        }
+                    }
                 }
                 LaunchedEffect(Unit) {
                     HorusRemoteConfig.refresh(this@MainActivity) { updated ->
@@ -1153,6 +1253,47 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         )
+
+                        AnimatedVisibility(
+                            visible = navigationDestination != null,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .navigationBarsPadding()
+                                .padding(bottom = 18.dp),
+                            enter = slideInVertically(
+                                animationSpec = tween(420, easing = FastOutSlowInEasing),
+                                initialOffsetY = { it }
+                            ) + fadeIn(tween(300)),
+                            exit = slideOutVertically(
+                                animationSpec = tween(320, easing = FastOutSlowInEasing),
+                                targetOffsetY = { it }
+                            ) + fadeOut(tween(220))
+                        ) {
+                            navigationDestination?.let { destination ->
+                                HorusNavigationPanel(
+                                    destination = destination,
+                                    selectedMode = selectedTravelMode,
+                                    route = calculatedRoute,
+                                    calculating = routeLoading,
+                                    navigating = navigationStarted,
+                                    error = navigationError,
+                                    onModeSelected = { mode ->
+                                        if (selectedTravelMode != mode) {
+                                            selectedTravelMode = mode
+                                            clearCalculatedRoute()
+                                            navigationError = when (mode) {
+                                                "transit" -> "مسارات القطارات ستظهر عند توفر بيانات النقل العام للمنطقة."
+                                                "flight" -> "الطيران يُعرض كتقدير للمسافة الجوية، وليس مسار ملاحة أرضي."
+                                                else -> null
+                                            }
+                                        }
+                                    },
+                                    onCalculate = { calculateSelectedRoute() },
+                                    onStart = { beginNavigation() },
+                                    onCancel = { cancelNavigation() }
+                                )
+                            }
+                        }
 
                         HorusMapSearchPanel(
                             query = searchQuery,
