@@ -319,6 +319,20 @@ object HorusMapSearchApi {
         if (!root.optBoolean("ok")) throw IllegalStateException(root.optString("error", "تعذر البحث عن القطارات."))
         val options = root.optJSONArray("options") ?: JSONArray()
         val lines = buildList {
+            fun appendStations(key: String, label: String) {
+                val stations = root.optJSONArray(key) ?: JSONArray()
+                for (stationIndex in 0 until stations.length()) {
+                    val station = stations.optJSONObject(stationIndex) ?: continue
+                    val distanceMeters = station.optInt("distanceMeters")
+                    val distanceLabel = if (distanceMeters >= 1000) {
+                        String.format(Locale.US, "%.1f كم", distanceMeters / 1000.0)
+                    } else "$distanceMeters متر"
+                    add("$label: ${station.optString("name", "محطة قطار")} • $distanceLabel")
+                }
+            }
+            appendStations("originStations", "أقرب محطة للبداية")
+            appendStations("destinationStations", "أقرب محطة للوجهة")
+            if (options.length() > 0) add("مواعيد القطارات المتاحة:")
             for (index in 0 until options.length()) {
                 val option = options.optJSONObject(index) ?: continue
                 val durationMinutes = (option.optInt("durationSeconds") / 60).coerceAtLeast(1)
