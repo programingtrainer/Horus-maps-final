@@ -147,3 +147,30 @@ private fun formatNavigationDuration(seconds: Int): String {
     return if (minutes < 60) "$minutes دقيقة"
     else "${minutes / 60} ساعة و ${minutes % 60} دقيقة"
 }
+@Composable
+fun HorusNavigationProgressCard(
+    remainingMeters: Int,
+    remainingSeconds: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF102A43),
+        shadowElevation = 8.dp
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text("المتبقي للوصول", color = Color(0xFFB8D5F2), fontSize = 10.sp)
+                Text(formatNavigationDistance(remainingMeters), color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            }
+            Column {
+                Text("الوقت المتبقي", color = Color(0xFFB8D5F2), fontSize = 10.sp)
+                Text(formatNavigationDuration(remainingSeconds), color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
