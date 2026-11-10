@@ -56,10 +56,17 @@ fun HorusNavigationPanel(
     originStations: List<HorusTransitStation> = emptyList(),
     destinationStations: List<HorusTransitStation> = emptyList(),
     onRouteToOriginStation: (HorusTransitStation) -> Unit = {},
+    originAirport: HorusAirport? = null,
+    destinationAirport: HorusAirport? = null,
+    onRouteToOriginAirport: (HorusAirport) -> Unit = {},
     waitingForTrainArrival: Boolean = false,
+    waitingForFlightArrival: Boolean = false,
     intercityItineraryLines: List<String> = emptyList(),
     intercityItineraryMessage: String? = null,
+    flightItineraryLines: List<String> = emptyList(),
+    flightItineraryMessage: String? = null,
     onConfirmTrainArrival: () -> Unit = {},
+    onConfirmFlightArrival: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -117,7 +124,25 @@ fun HorusNavigationPanel(
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16834A))
                 ) { Text("وصلت إلى محطة الوصول — تابع إلى وجهتي") }
             }
-            if (!waitingForTrainArrival && (selectedMode == "transit" || selectedMode == "flight")) {
+            if (waitingForFlightArrival) {
+                Text("رحلة الطيران إلى ${destination.name}", color = Color(0xFF172B45), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                if (!flightItineraryMessage.isNullOrBlank()) Text(flightItineraryMessage, color = Color(0xFFB54708), fontSize = 10.sp)
+                Column(modifier = Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    flightItineraryLines.forEach { line -> Text(line, color = Color(0xFF475467), fontSize = 10.sp, lineHeight = 14.sp) }
+                }
+                Text("اتبع بيانات الرحلة حتى مطار الوصول، ثم أكّد وصولك للانتقال إلى الجزء الأخير من الرحلة.", color = Color(0xFF475467), fontSize = 11.sp)
+                Button(onClick = onConfirmFlightArrival, modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16834A))) { Text("وصلت إلى مطار الوصول — تابع إلى وجهتي") }
+            }
+            if (!waitingForTrainArrival && !waitingForFlightArrival && (selectedMode == "transit" || selectedMode == "flight")) {
+                if (selectedMode == "flight" && originAirport != null) {
+                    val airport = originAirport
+                    val distance = if (airport.distanceMeters >= 1000) String.format(java.util.Locale.US, "%.1f كم", airport.distanceMeters / 1000.0) else "${airport.distanceMeters} متر"
+                    Text("مطار المغادرة: ${airport.name} (${airport.iataCode}) • يبعد $distance", color = Color(0xFF344054), fontSize = 11.sp)
+                    destinationAirport?.let { target -> Text("مطار الوصول: ${target.name} (${target.iataCode})", color = Color(0xFF667085), fontSize = 10.sp) }
+                    Button(onClick = { onRouteToOriginAirport(airport) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087FE5))) { Text("احسب الطريق إلى مطار المغادرة") }
+                }
                 if (selectedMode == "transit" && originStations.isNotEmpty()) {
                     Text("محطات الرحلة", color = Color(0xFF172B45), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     originStations.take(3).forEach { station ->
