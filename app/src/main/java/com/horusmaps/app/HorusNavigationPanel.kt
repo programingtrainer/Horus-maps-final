@@ -174,3 +174,57 @@ fun HorusNavigationProgressCard(
         }
     }
 }
+
+
+private fun maneuverArabicLabel(step: HorusRouteStep): String {
+    val modifier = step.modifier.lowercase()
+    val direction = when (modifier) {
+        "left" -> "يسارًا"
+        "slight_left" -> "يسارًا بشكل خفيف"
+        "sharp_left" -> "يسارًا حادًا"
+        "right" -> "يمينًا"
+        "slight_right" -> "يمينًا بشكل خفيف"
+        "sharp_right" -> "يمينًا حادًا"
+        "uturn" -> "استدر للخلف"
+        "straight" -> "مستقيمًا"
+        else -> ""
+    }
+    val action = when (step.type.lowercase()) {
+        "turn" -> if (direction.isBlank()) "انعطف" else "انعطف $direction"
+        "continue" -> if (direction.isBlank()) "واصل السير" else "واصل $direction"
+        "merge" -> "اندُمج مع الطريق"
+        "ramp" -> if (direction.isBlank()) "اسلك المنحدر" else "اسلك المنحدر $direction"
+        "exit" -> if (direction.isBlank()) "اسلك المخرج" else "اسلك المخرج $direction"
+        "roundabout" -> if (modifier == "exit") "اخرج من الدوار" else "ادخل الدوار"
+        "ferry" -> if (modifier == "exit") "غادر العبّارة" else "استقل العبّارة"
+        else -> step.instruction.ifBlank { "تابع السير" }
+    }
+    return if (step.name.isBlank()) action else "$action في ${step.name}"
+}
+
+@Composable
+fun HorusNavigationManeuverCard(
+    maneuver: HorusRouteStep,
+    nextManeuver: HorusRouteStep?,
+    distanceToManeuverMeters: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+        color = Color.White, shadowElevation = 8.dp) {
+        Column(modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp)) {
+            Text("المناورة القادمة", color = Color(0xFF667085), fontSize = 10.sp,
+                fontWeight = FontWeight.Medium)
+            Text(maneuverArabicLabel(maneuver), color = Color(0xFF172B45),
+                fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(
+                if (distanceToManeuverMeters < 1000) "بعد $distanceToManeuverMeters متر"
+                else String.format(java.util.Locale.getDefault(), "بعد %.1f كم", distanceToManeuverMeters / 1000.0),
+                color = Color(0xFF1769C2), fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+            )
+            if (nextManeuver != null) {
+                Spacer(modifier = Modifier.height(5.dp))
+                Text("ثم: ${maneuverArabicLabel(nextManeuver)}", color = Color(0xFF667085), fontSize = 11.sp)
+            }
+        }
+    }
+}
