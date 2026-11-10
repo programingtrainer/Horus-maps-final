@@ -770,6 +770,7 @@ class MainActivity : ComponentActivity() {
                 var navigationStarted by remember { mutableStateOf(false) }
                 var navigationError by remember { mutableStateOf<String?>(null) }
                 var transportLoading by remember { mutableStateOf(false) }
+                var transportSearchJob by remember { mutableStateOf<Job?>(null) }
                 var transportSearchResult by remember { mutableStateOf<HorusTransportSearchResult?>(null) }
                 var transportSearchError by remember { mutableStateOf<String?>(null) }
                 var travelDate by remember {
@@ -1186,6 +1187,9 @@ class MainActivity : ComponentActivity() {
                     routeCoordinates = emptyList()
                     navigationProgress = null
                     navigationManeuver = null
+                    transportSearchJob?.cancel()
+                    transportSearchJob = null
+                    transportLoading = false
                     transportSearchResult = null
                     transportSearchError = null
                     navigationStarted = false
@@ -1294,10 +1298,11 @@ class MainActivity : ComponentActivity() {
                         requestOrLocate()
                         return
                     }
+                    transportSearchJob?.cancel()
                     transportLoading = true
                     transportSearchError = null
                     transportSearchResult = null
-                    accountScope.launch {
+                    transportSearchJob = accountScope.launch {
                         try {
                             val result = if (mode == "transit") {
                                 val departureTime = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
@@ -1338,9 +1343,9 @@ class MainActivity : ComponentActivity() {
                         } catch (error: CancellationException) {
                             throw error
                         } catch (error: Exception) {
-                            transportSearchError = error.message ?: "تعذر البحث عن وسائل النقل."
+                            if (selectedTravelMode == mode) transportSearchError = error.message ?: "تعذر البحث عن وسائل النقل."
                         } finally {
-                            transportLoading = false
+                            if (selectedTravelMode == mode) transportLoading = false
                         }
                     }
                 }
