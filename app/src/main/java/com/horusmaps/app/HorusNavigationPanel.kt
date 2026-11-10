@@ -45,6 +45,7 @@ fun HorusNavigationPanel(
     onStart: () -> Unit,
     onCancel: () -> Unit,
     travelDate: String = "",
+    travelTime: String = "",
     transportLoading: Boolean = false,
     transportMessage: String? = null,
     transportOptions: List<String> = emptyList(),
@@ -86,15 +87,12 @@ fun HorusNavigationPanel(
                 }
             }
             if (selectedMode == "transit" || selectedMode == "flight") {
-                if (selectedMode == "flight") {
-                    Text(
-                        "تاريخ المغادرة: $travelDate",
-                        modifier = Modifier.clickable(onClick = onPickDate).padding(vertical = 4.dp),
-                        color = Color(0xFF1769C2), fontSize = 12.sp, fontWeight = FontWeight.SemiBold
-                    )
-                } else {
-                    Text("سيتم البحث عن الرحلات المتاحة حسب التوقيت المحلي الحالي.", color = Color(0xFF667085), fontSize = 10.sp)
-                }
+                Text(
+                    if (selectedMode == "transit") "موعد مغادرة القطار: $travelDate • $travelTime"
+                    else "تاريخ المغادرة: $travelDate",
+                    modifier = Modifier.clickable(onClick = onPickDate).padding(vertical = 4.dp),
+                    color = Color(0xFF1769C2), fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                )
                 Button(
                     onClick = onSearchTransport,
                     enabled = !transportLoading,
@@ -102,7 +100,7 @@ fun HorusNavigationPanel(
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087FE5))
                 ) {
-                    Text(if (transportLoading) "جارٍ البحث عن الرحلات..." else if (selectedMode == "transit") "ابحث عن القطارات والانتقالات" else "ابحث عن رحلات الطيران")
+                    Text(if (transportLoading) "جارٍ البحث عن الرحلات..." else if (selectedMode == "transit") "ابحث عن القطارات" else "ابحث عن رحلات الطيران")
                 }
                 if (!transportMessage.isNullOrBlank()) {
                     Text(transportMessage, color = if (transportOptions.isEmpty()) Color(0xFFB54708) else Color(0xFF475467), fontSize = 11.sp)
