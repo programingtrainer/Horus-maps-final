@@ -1,6 +1,7 @@
 package com.horusmaps.app
 
 import android.Manifest
+import android.app.DatePickerDialog
 import android.animation.ValueAnimator
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -101,6 +102,7 @@ import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
 import java.util.Locale
+import java.util.Calendar
 
 
 /**
@@ -767,6 +769,12 @@ class MainActivity : ComponentActivity() {
                 var routeLoading by remember { mutableStateOf(false) }
                 var navigationStarted by remember { mutableStateOf(false) }
                 var navigationError by remember { mutableStateOf<String?>(null) }
+                var transportLoading by remember { mutableStateOf(false) }
+                var transportSearchResult by remember { mutableStateOf<HorusTransportSearchResult?>(null) }
+                var transportSearchError by remember { mutableStateOf<String?>(null) }
+                var travelDate by remember {
+                    mutableStateOf(java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time))
+                }
 
                 fun activateAccount(
                     email: String,
@@ -1178,6 +1186,8 @@ class MainActivity : ComponentActivity() {
                     routeCoordinates = emptyList()
                     navigationProgress = null
                     navigationManeuver = null
+                    transportSearchResult = null
+                    transportSearchError = null
                     navigationStarted = false
                 }
 
@@ -1272,6 +1282,69 @@ class MainActivity : ComponentActivity() {
                             routeLoading = false
                         }
                     }
+                }
+
+
+                fun searchSelectedTransport(mode: String = selectedTravelMode) {
+                    val destination = navigationDestination ?: return
+                    val map = mapLibreMap ?: return
+                    val origin = bestKnownLocation(map)
+                    if (origin == null) {
+                        transportSearchError = "اسمح للتطبيق بالوصول إلى موقعك لتحديد أقرب محطة أو مطار."
+                        requestOrLocate()
+                        return
+                    }
+                    transportLoading = true
+                    transportSearchError = null
+                    transportSearchResult = null
+                    accountScope.launch {
+                        try {
+                            val result = if (mode == "transit") {
+                                val now = Calendar.getInstance()
+                                HorusMapSearchApi.searchTransit(
+                                    origin.latitude, origin.longitude,
+                                    destination.latitude, destination.longitude,
+                                    java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now.time),
+                                    java.text.SimpleDateFormat("HH:mm", Locale.US).format(now.time)
+                                )
+                            } else {
+                                HorusMapSearchApi.searchFlights(
+                                    origin.latitude, origin.longitude,
+                                    destination.latitude, destination.longitude,
+                                    travelDate
+                                )
+                            }
+                            if (selectedTravelMode == mode) transportSearchResult = result
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            transportSearchError = error.message ?: "تعذر البحث عن وسائل النقل."
+                        } finally {
+                            transportLoading = false
+                        }
+                    }
+                }
+
+                fun chooseTravelDate() {
+                    val calendar = Calendar.getInstance()
+                    val parts = travelDate.split("-")
+                    if (parts.size == 3) {
+                        runCatching {
+                            calendar.set(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt())
+                        }
+                    }
+                    DatePickerDialog(
+                        this@MainActivity,
+                        { _, year, month, day ->
+                            travelDate = String.format(Locale.US, "%04d-%02d-%02d", year, month + 1, day)
+                            if (selectedTravelMode == "flight") searchSelectedTransport("flight")
+                        },
+                        calendar.get(Calendar.YEAR),
+                        calendar.get(Calendar.MONTH),
+                        calendar.get(Calendar.DAY_OF_MONTH)
+                    ).apply {
+                        datePicker.minDate = System.currentTimeMillis()
+                    }.show()
                 }
 
                 fun beginNavigation() {
@@ -1485,13 +1558,16 @@ class MainActivity : ComponentActivity() {
                                         if (selectedTravelMode != mode) {
                                             selectedTravelMode = mode
                                             clearCalculatedRoute()
-                                            navigationError = when (mode) {
-                                                "transit" -> "مسارات القطارات ستظهر عند توفر بيانات النقل العام للمنطقة."
-                                                "flight" -> "الطيران يُعرض كتقدير للمسافة الجوية، وليس مسار ملاحة أرضي."
-                                                else -> null
-                                            }
+                                            navigationError = null
+                                            if (mode == "transit" || mode == "flight") searchSelectedTransport(mode)
                                         }
                                     },
+                                    travelDate = travelDate,
+                                    transportLoading = transportLoading,
+                                    transportMessage = transportSearchError ?: transportSearchResult?.message,
+                                    transportOptions = transportSearchResult?.options.orEmpty(),
+                                    onSearchTransport = { searchSelectedTransport() },
+                                    onPickDate = { chooseTravelDate() },
                                     onCalculate = { calculateSelectedRoute() },
                                     onStart = { beginNavigation() },
                                     onCancel = { cancelNavigation() }
