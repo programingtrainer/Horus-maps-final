@@ -1222,37 +1222,93 @@ class MainActivity : ComponentActivity() {
                     routeLoading = false
                 }
 
+                fun calculateRouteTo(destination: HorusNavigationDestination) {
+                    val map = mapLibreMap ?: return
+                    val origin = bestKnownLocation(map)
+                    if (origin == null) {
+                        navigationError = "اسمح للتطبيق بالوصول إلى موقعك الحالي لتحديد نقطة البداية."
+                        requestOrLocate()
+                        return
+                    }
+                    routeLoading = true
+                    navigationError = null
+                    accountScope.launch {
+                        try {
+                            val result = HorusMapSearchApi.route(
+                                origin.latitude,
+                                origin.longitude,
+                                destination.latitude,
+                                destination.longitude,
+                                selectedTravelMode
+                            )
+                            val coordinates = org.json.JSONObject(result.geometryGeoJson)
+                                .getJSONArray("coordinates")
+                            val points = buildList {
+                                for (index in 0 until coordinates.length()) {
+                                    val pair = coordinates.optJSONArray(index) ?: continue
+                                    if (pair.length() < 2) continue
+                                    add(LatLng(pair.getDouble(1), pair.getDouble(0)))
+                                }
+                            }
+                            if (points.size < 2) throw IllegalStateException("لم يصل مسار صالح من خدمة الملاحة.")
+                            routePolyline?.let { runCatching { map.removeAnnotation(it) } }
+                            routePolyline = map.addPolyline(
+                                PolylineOptions()
+                                    .addAll(points)
+                                    .color(android.graphics.Color.rgb(25, 118, 210))
+                                    .width(6f)
+                            )
+                            routeCoordinates = points
+                            calculatedRoute = result
+                            bestKnownLocation(map)?.let { location ->
+                                val progress = calculateRouteProgress(points, location, result)
+                                navigationProgress = progress
+                                navigationManeuver = progress?.let { selectNavigationManeuver(result, it) }
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            navigationError = error.message ?: "تعذر حساب الطريق. حاول مرة أخرى."
+                            calculatedRoute = null
+                        } finally {
+                            routeLoading = false
+                        }
+                    }
+                }
+
                 fun routeToOriginStation(station: HorusTransitStation) {
                     val finalDestination = navigationDestination ?: return
                     val transitResult = transportSearchResult
-                    if (transitResult?.available != true || transitResult.options.isEmpty()) {
-                        navigationError = transitResult?.message ?: "ابحث عن جدول قطار متاح قبل التوجه إلى محطة الانطلاق."
-                        return
-                    }
-                    val arrivalStation = transitResult.destinationStations.firstOrNull()
-                    if (arrivalStation == null) {
-                        navigationError = "لا توجد محطة وصول محددة للوجهة؛ لا يمكن تجهيز رحلة قطار كاملة."
-                        return
-                    }
-                    intercityItineraryLines = transitResult.options
-                    intercityItineraryMessage = transitResult.message
-                    intercityFinalDestination = finalDestination
+                    val timetableAvailable = transitResult?.available == true && transitResult.options.isNotEmpty()
+                    val arrivalStation = if (timetableAvailable) {
+                        transitResult?.destinationStations?.firstOrNull()
+                    } else null
+
+                    // A mapped station is still a valid navigation destination even when
+                    // the open timetable provider has no schedule for this route/date.
+                    intercityItineraryLines = if (arrivalStation != null) transitResult?.options.orEmpty() else emptyList()
+                    intercityItineraryMessage = if (arrivalStation != null) transitResult?.message else
+                        "تم العثور على المحطة. لا تتوفر حاليًا بيانات جدول قطار مؤكدة لهذا المسار؛ يمكنك التوجيه إلى المحطة مباشرة."
+                    intercityFinalDestination = if (arrivalStation != null) finalDestination else null
                     intercityArrivalStation = arrivalStation
-                    intercityStage = "to_origin_station"
+                    intercityStage = if (arrivalStation != null) "to_origin_station" else "none"
                     navigationStarted = false
                     clearCalculatedRoute()
                     selectedTravelMode = "driving"
-                    navigationDestination = HorusNavigationDestination(
+                    val stationDestination = HorusNavigationDestination(
                         name = station.name,
                         address = "محطة انطلاق القطار • تبعد ${station.distanceMeters} متر عن نقطة البداية",
                         latitude = station.latitude,
                         longitude = station.longitude
                     )
+                    navigationDestination = stationDestination
                     navigationError = null
                     mapLibreMap?.animateCamera(
                         CameraUpdateFactory.newLatLngZoom(LatLng(station.latitude, station.longitude), 14.5),
                         700
                     )
+                    // Tapping "اذهب" now calculates and draws the road route immediately.
+                    calculateRouteTo(stationDestination)
                 }
 
                 fun routeToOriginAirport(airport: HorusAirport) {
@@ -1399,59 +1455,8 @@ class MainActivity : ComponentActivity() {
 
                 fun calculateSelectedRoute() {
                     val destination = navigationDestination ?: return
-                    val map = mapLibreMap ?: return
-                    val origin = bestKnownLocation(map)
-                    if (origin == null) {
-                        navigationError = "اسمح للتطبيق بالوصول إلى موقعك الحالي لتحديد نقطة البداية."
-                        requestOrLocate()
-                        return
-                    }
-                    routeLoading = true
-                    navigationError = null
-                    accountScope.launch {
-                        try {
-                            val result = HorusMapSearchApi.route(
-                                origin.latitude,
-                                origin.longitude,
-                                destination.latitude,
-                                destination.longitude,
-                                selectedTravelMode
-                            )
-                            val coordinates = org.json.JSONObject(result.geometryGeoJson)
-                                .getJSONArray("coordinates")
-                            val points = buildList {
-                                for (index in 0 until coordinates.length()) {
-                                    val pair = coordinates.optJSONArray(index) ?: continue
-                                    if (pair.length() < 2) continue
-                                    add(LatLng(pair.getDouble(1), pair.getDouble(0)))
-                                }
-                            }
-                            if (points.size < 2) throw IllegalStateException("لم يصل مسار صالح من خدمة الملاحة.")
-                            routePolyline?.let { runCatching { map.removeAnnotation(it) } }
-                            routePolyline = map.addPolyline(
-                                PolylineOptions()
-                                    .addAll(points)
-                                    .color(android.graphics.Color.rgb(25, 118, 210))
-                                    .width(6f)
-                            )
-                            routeCoordinates = points
-                            calculatedRoute = result
-                            bestKnownLocation(map)?.let { location ->
-                                val progress = calculateRouteProgress(points, location, result)
-                                navigationProgress = progress
-                                navigationManeuver = progress?.let { selectNavigationManeuver(result, it) }
-                            }
-                        } catch (error: CancellationException) {
-                            throw error
-                        } catch (error: Exception) {
-                            navigationError = error.message ?: "تعذر حساب الطريق. حاول مرة أخرى."
-                            calculatedRoute = null
-                        } finally {
-                            routeLoading = false
-                        }
-                    }
+                    calculateRouteTo(destination)
                 }
-
 
                 fun searchSelectedTransport(mode: String = selectedTravelMode, dateOverride: String = travelDate) {
                     val destination = navigationDestination ?: return
