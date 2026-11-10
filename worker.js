@@ -1023,10 +1023,19 @@ export default {
         const seen = new Set();
         for (const feature of [...nominatimFeatures, ...photonFeatures]) {
           const properties = feature?.properties || {};
-          const coordinates = feature?.geometry?.coordinates;
-          if (!Array.isArray(coordinates) || coordinates.length < 2) continue;
-          const longitudeValue = Number(coordinates[0]);
-          const latitudeValue = Number(coordinates[1]);
+          const coordinatePairs = [];
+          const collectPairs = value => {
+            if (!Array.isArray(value)) return;
+            if (value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number") {
+              coordinatePairs.push([value[0], value[1]]);
+              return;
+            }
+            for (const child of value) collectPairs(child);
+          };
+          collectPairs(feature?.geometry?.coordinates);
+          if (!coordinatePairs.length) continue;
+          const longitudeValue = coordinatePairs.reduce((sum, point) => sum + point[0], 0) / coordinatePairs.length;
+          const latitudeValue = coordinatePairs.reduce((sum, point) => sum + point[1], 0) / coordinatePairs.length;
           if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue) ||
               latitudeValue < -90 || latitudeValue > 90 || longitudeValue < -180 || longitudeValue > 180) continue;
           const osmKey = properties.osm_type && properties.osm_id
