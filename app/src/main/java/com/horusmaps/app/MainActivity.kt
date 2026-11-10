@@ -760,6 +760,9 @@ class MainActivity : ComponentActivity() {
                 var geographySearchResults by remember { mutableStateOf<List<HorusGeoSearchResult>>(emptyList()) }
                 var nearbySearchResults by remember { mutableStateOf<List<HorusNearbyPlace>>(emptyList()) }
                 var navigationDestination by remember { mutableStateOf<HorusNavigationDestination?>(null) }
+                var intercityFinalDestination by remember { mutableStateOf<HorusNavigationDestination?>(null) }
+                var intercityArrivalStation by remember { mutableStateOf<HorusTransitStation?>(null) }
+                var intercityStage by remember { mutableStateOf("none") }
                 var selectedTravelMode by remember { mutableStateOf("driving") }
                 var calculatedRoute by remember { mutableStateOf<HorusRouteResult?>(null) }
                 var routeCoordinates by remember { mutableStateOf<List<LatLng>>(emptyList()) }
@@ -1201,8 +1204,73 @@ class MainActivity : ComponentActivity() {
                 fun cancelNavigation() {
                     clearCalculatedRoute()
                     navigationDestination = null
+                    intercityFinalDestination = null
+                    intercityArrivalStation = null
+                    intercityStage = "none"
                     navigationError = null
                     routeLoading = false
+                }
+
+                fun routeToOriginStation(station: HorusTransitStation) {
+                    val finalDestination = navigationDestination ?: return
+                    val arrivalStation = transportSearchResult?.destinationStations?.firstOrNull()
+                    if (arrivalStation == null) {
+                        navigationError = "لا توجد محطة وصول محددة للوجهة؛ لا يمكن تجهيز رحلة قطار كاملة."
+                        return
+                    }
+                    intercityFinalDestination = finalDestination
+                    intercityArrivalStation = arrivalStation
+                    intercityStage = "to_origin_station"
+                    navigationStarted = false
+                    clearCalculatedRoute()
+                    selectedTravelMode = "driving"
+                    navigationDestination = HorusNavigationDestination(
+                        name = station.name,
+                        address = "محطة انطلاق القطار • تبعد ${station.distanceMeters} متر عن نقطة البداية",
+                        latitude = station.latitude,
+                        longitude = station.longitude
+                    )
+                    navigationError = null
+                    mapLibreMap?.animateCamera(
+                        CameraUpdateFactory.newLatLngZoom(LatLng(station.latitude, station.longitude), 14.5),
+                        700
+                    )
+                }
+
+                fun confirmReachedOriginStation() {
+                    val arrival = intercityArrivalStation ?: return
+                    navigationStarted = false
+                    clearCalculatedRoute()
+                    intercityStage = "waiting_train"
+                    selectedTravelMode = "transit"
+                    navigationDestination = HorusNavigationDestination(
+                        name = arrival.name,
+                        address = "محطة وصول القطار • اتبع بيانات الرحلة المحددة للوصول إليها",
+                        latitude = arrival.latitude,
+                        longitude = arrival.longitude
+                    )
+                    navigationError = null
+                    mapLibreMap?.animateCamera(
+                        CameraUpdateFactory.newLatLngZoom(LatLng(arrival.latitude, arrival.longitude), 13.5),
+                        700
+                    )
+                }
+
+                fun confirmReachedArrivalStation() {
+                    val finalDestination = intercityFinalDestination ?: return
+                    navigationStarted = false
+                    intercityStage = "none"
+                    intercityFinalDestination = null
+                    intercityArrivalStation = null
+                    navigationDestination = finalDestination
+                    selectedTravelMode = "driving"
+                    transportSearchJob?.cancel()
+                    transportSearchResult = null
+                    transportSearchError = null
+                    transportLoading = false
+                    clearCalculatedRoute()
+                    navigationError = null
+                    calculateSelectedRoute()
                 }
 
                 fun selectGeographyResult(result: HorusGeoSearchResult) {
@@ -1220,6 +1288,9 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun selectNearbyResult(result: HorusNearbyPlace) {
+                    intercityFinalDestination = null
+                    intercityArrivalStation = null
+                    intercityStage = "none"
                     clearCalculatedRoute()
                     transportSearchJob?.cancel()
                     transportSearchResult = null
@@ -1629,9 +1700,14 @@ class MainActivity : ComponentActivity() {
                                     transportLoading = transportLoading,
                                     transportMessage = transportSearchError ?: transportSearchResult?.message,
                                     transportOptions = transportSearchResult?.options.orEmpty(),
+                                    originStations = transportSearchResult?.originStations.orEmpty(),
+                                    destinationStations = transportSearchResult?.destinationStations.orEmpty(),
+                                    onRouteToOriginStation = { station -> routeToOriginStation(station) },
+                                    waitingForTrainArrival = intercityStage == "waiting_train",
+                                    onConfirmTrainArrival = { confirmReachedArrivalStation() },
                                     onSearchTransport = { searchSelectedTransport() },
                                     onPickDate = { chooseTravelDate() },
-                                    allowIntercityModes = navigationDestination?.isLocalPlace != true,
+                                    allowIntercityModes = navigationDestination?.isLocalPlace != true && intercityStage == "none",
                                     onCalculate = { calculateSelectedRoute() },
                                     onStart = { beginNavigation() },
                                     onCancel = { cancelNavigation() }
@@ -1685,7 +1761,11 @@ class MainActivity : ComponentActivity() {
                                 remainingSeconds = navigationProgress!!.remainingSeconds,
                                 maneuver = navigationManeuver?.current,
                                 distanceToManeuverMeters = navigationManeuver?.distanceToCurrentMeters,
-                                onStop = { cancelNavigation() },
+                                onStop = {
+                                    if (intercityStage == "to_origin_station") confirmReachedOriginStation()
+                                    else cancelNavigation()
+                                },
+                                arrivedActionLabel = if (intercityStage == "to_origin_station") "وصلت للمحطة" else "إنهاء",
                                 modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
                                     .padding(top = 74.dp)
                             )
