@@ -1319,7 +1319,6 @@ class MainActivity : ComponentActivity() {
                     transportLoading = false
                     clearCalculatedRoute()
                     navigationError = null
-                    calculateSelectedRoute()
                 }
 
                 fun confirmReachedArrivalAirport() { continueToFinalDestination() }
