@@ -773,7 +773,7 @@ class MainActivity : ComponentActivity() {
                 var transportSearchResult by remember { mutableStateOf<HorusTransportSearchResult?>(null) }
                 var transportSearchError by remember { mutableStateOf<String?>(null) }
                 var travelDate by remember {
-                    mutableStateOf(java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time))
+                    mutableStateOf(java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().apply { add(Calendar.DAY_OF_MONTH, 1) }.time))
                 }
 
                 fun activateAccount(
