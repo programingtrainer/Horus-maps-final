@@ -76,6 +76,19 @@ fun HorusNavigationPanel(
                     )
                 }
             }
+            if (selectedMode == "transit") {
+                Text(
+                    "مسارات القطارات تعتمد على توفر جداول ومعلومات النقل العام في المنطقة، ولم نفعّل مصدرًا موثوقًا لها بعد.",
+                    color = Color(0xFF667085),
+                    fontSize = 10.sp
+                )
+            } else if (selectedMode == "flight") {
+                Text(
+                    "الطيران سيُعرض كتقدير للمسافة والوقت الجوي، وليس كمسار ملاحة على الطرق.",
+                    color = Color(0xFF667085),
+                    fontSize = 10.sp
+                )
+            }
             if (route != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     Column {
