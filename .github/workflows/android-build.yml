@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           node --input-type=module <<'NODE'
-          const base = "https://ui-horusmaps-map-attribution-horus-maps-final.horus-egypt-company.workers.dev";
+          const base = "https://feature-advanced-search-navigation-horus-maps-final.horus-egypt-company.workers.dev";
           const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
           let healthy = false;
           for (let attempt = 1; attempt <= 24; attempt++) {
@@ -51,6 +51,26 @@ jobs:
             await sleep(5000);
           }
           if (!healthy) throw new Error("Preview Worker did not become healthy within 120 seconds.");
+
+          const flightValidationResponse = await fetch(base + "/v1/search/flights", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+          });
+          const flightValidation = await flightValidationResponse.json();
+          if (flightValidationResponse.status !== 400 || flightValidation.ok !== false) {
+            throw new Error("Flight search validation contract failed: HTTP " + flightValidationResponse.status);
+          }
+
+          const bookingValidationResponse = await fetch(base + "/v1/search/flights/booking-links", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+          });
+          const bookingValidation = await bookingValidationResponse.json();
+          if (bookingValidationResponse.status !== 400 || bookingValidation.ok !== false) {
+            throw new Error("Flight booking-link validation contract failed: HTTP " + bookingValidationResponse.status);
+          }
 
           const reverseResponse = await fetch(base + "/v1/search/reverse?lat=24.7171757&lon=46.6858209", { signal: AbortSignal.timeout(20000) });
           const reverse = await reverseResponse.json();
