@@ -1459,7 +1459,7 @@ class MainActivity : ComponentActivity() {
                         )
 
                         AnimatedVisibility(
-                            visible = navigationDestination != null,
+                            visible = navigationDestination != null && !navigationStarted,
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .navigationBarsPadding()
@@ -1540,23 +1540,15 @@ class MainActivity : ComponentActivity() {
                         )
 
                         if (navigationStarted && navigationProgress != null) {
-                            Column(
+                            HorusNavigationActiveHud(
+                                remainingMeters = navigationProgress!!.remainingMeters,
+                                remainingSeconds = navigationProgress!!.remainingSeconds,
+                                maneuver = navigationManeuver?.current,
+                                distanceToManeuverMeters = navigationManeuver?.distanceToCurrentMeters,
+                                onStop = { cancelNavigation() },
                                 modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
-                                    .padding(top = 74.dp).fillMaxWidth(0.90f),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                HorusNavigationProgressCard(
-                                    remainingMeters = navigationProgress!!.remainingMeters,
-                                    remainingSeconds = navigationProgress!!.remainingSeconds
-                                )
-                                navigationManeuver?.let { maneuver ->
-                                    HorusNavigationManeuverCard(
-                                        maneuver = maneuver.current,
-                                        nextManeuver = maneuver.next,
-                                        distanceToManeuverMeters = maneuver.distanceToCurrentMeters
-                                    )
-                                }
-                            }
+                                    .padding(top = 74.dp)
+                            )
                         }
 
                         // MapLibre-style plain wordmark in the lower-right corner (no badge or info icon).
