@@ -1327,6 +1327,73 @@ export default {
       return json({ ok: true, service: "horus-maps-final", apiVersion: 1 });
     }
 
+    if (url.pathname === "/v1/search/reverse" && request.method === "GET") {
+      const latitude = validCoordinate(url.searchParams.get("lat"), -90, 90);
+      const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
+      if (latitude === null || longitude === null) {
+        return json({ ok: false, error: "إحداثيات الموقع غير صالحة." }, 400);
+      }
+      const cacheKey = "reverse-country:v1:" + latitude.toFixed(3) + ":" + longitude.toFixed(3);
+      return cachedJson(env, cacheKey, 86400, async () => {
+        let countryCode = "";
+        let country = "";
+        try {
+          const target = new URL("https://nominatim.openstreetmap.org/reverse");
+          target.searchParams.set("lat", String(latitude));
+          target.searchParams.set("lon", String(longitude));
+          target.searchParams.set("format", "jsonv2");
+          target.searchParams.set("addressdetails", "1");
+          target.searchParams.set("zoom", "10");
+          target.searchParams.set("accept-language", "ar,en");
+          const response = await fetchNominatim(target.toString(), {
+            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+            signal: AbortSignal.timeout(9000)
+          });
+          if (response.ok) {
+            const payload = await response.json();
+            countryCode = String(payload.address?.country_code || "").toLowerCase();
+            country = String(payload.address?.country || "");
+          }
+        } catch (error) {
+          console.warn("[HorusSearch] Nominatim reverse lookup failed", String(error?.message || error).slice(0, 120));
+        }
+
+        if (!/^[a-z]{2}$/.test(countryCode)) {
+          try {
+            const target = new URL("https://photon.komoot.io/reverse");
+            target.searchParams.set("lat", String(latitude));
+            target.searchParams.set("lon", String(longitude));
+            target.searchParams.set("limit", "1");
+            target.searchParams.set("lang", "en");
+            const response = await fetch(target.toString(), {
+              headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+              signal: AbortSignal.timeout(8000)
+            });
+            if (response.ok) {
+              const payload = await response.json();
+              const properties = payload.features?.[0]?.properties || {};
+              countryCode = String(properties.countrycode || "").toLowerCase();
+              country = String(properties.country || country);
+            }
+          } catch (error) {
+            console.warn("[HorusSearch] Photon reverse lookup failed", String(error?.message || error).slice(0, 120));
+          }
+        }
+
+        if (!/^[a-z]{2}$/.test(countryCode)) {
+          return json({ ok: false, error: "تعذر تحديد الدولة من إحداثيات الموقع حاليًا." }, 503);
+        }
+        return json({
+          ok: true,
+          countryCode,
+          country: country || countryNameFromCode(countryCode.toUpperCase()),
+          latitude,
+          longitude,
+          provider: country ? "Nominatim / Photon" : "OpenStreetMap"
+        });
+      });
+    }
+
     if (url.pathname === "/v1/config" && request.method === "GET") {
       try {
         const stored = env.HORUS_MAPS_CONFIG
