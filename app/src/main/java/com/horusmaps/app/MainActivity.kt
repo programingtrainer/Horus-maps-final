@@ -1345,6 +1345,14 @@ class MainActivity : ComponentActivity() {
                 fun confirmReachedArrivalStation() { continueToFinalDestination() }
 
                 fun selectGeographyResult(result: HorusGeoSearchResult) {
+                    intercityFinalDestination = null
+                    intercityArrivalStation = null
+                    intercityArrivalAirport = null
+                    intercityStage = "none"
+                    intercityItineraryLines = emptyList()
+                    intercityItineraryMessage = null
+                    flightItineraryLines = emptyList()
+                    flightItineraryMessage = null
                     clearCalculatedRoute()
                     navigationDestination = HorusNavigationDestination(
                         name = result.name,
@@ -1361,7 +1369,12 @@ class MainActivity : ComponentActivity() {
                 fun selectNearbyResult(result: HorusNearbyPlace) {
                     intercityFinalDestination = null
                     intercityArrivalStation = null
+                    intercityArrivalAirport = null
                     intercityStage = "none"
+                    intercityItineraryLines = emptyList()
+                    intercityItineraryMessage = null
+                    flightItineraryLines = emptyList()
+                    flightItineraryMessage = null
                     clearCalculatedRoute()
                     transportSearchJob?.cancel()
                     transportSearchResult = null
