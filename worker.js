@@ -184,7 +184,7 @@ function normalizeNavo24Flight(flight) {
     airlineIata: String(flight.airline?.iata || ""),
     origin,
     destination,
-    departure: departureUtc || String(flight.time_local || ""),
+    departure: String(flight.time_local || departureUtc),\n    departureUtc,
     arrival: arrivalUtc,
     durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : 0,
     timezone: String(flight.tz || ""),
