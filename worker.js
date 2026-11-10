@@ -975,6 +975,40 @@ async function queryOverpassCountry(countryCode, category, query) {
   }
 }
 
+async function findNearestRailStation(latitude, longitude, radiusMeters = 20000) {
+  const query = '[out:json][timeout:10];(' +
+    'node(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
+    'way(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
+    'relation(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
+    ');out center tags 40;';
+  const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "User-Agent": SEARCH_USER_AGENT },
+      body: "data=" + encodeURIComponent(query),
+      signal: AbortSignal.timeout(12000)
+    });
+    if (!response.ok) throw new Error("Overpass station lookup HTTP " + response.status);
+    const payload = await response.json();
+    if (!Array.isArray(payload.elements)) throw new Error("Invalid Overpass station response");
+    return payload.elements;
+  });
+  const elements = await Promise.any(attempts);
+  return elements.map(item => {
+    const latitudeValue = Number(item.lat ?? item.center?.lat);
+    const longitudeValue = Number(item.lon ?? item.center?.lon);
+    if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue)) return null;
+    const tags = item.tags || {};
+    return {
+      name: String(tags.name || tags["name:en"] || tags["name:ar"] || (tags.railway === "halt" ? "موقف قطار" : "محطة قطار")),
+      railway: String(tags.railway || "station"),
+      latitude: latitudeValue,
+      longitude: longitudeValue,
+      distanceMeters: Math.round(haversineMeters(latitude, longitude, latitudeValue, longitudeValue))
+    };
+  }).filter(Boolean).sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
+}
+
 async function queryOverpass(lat, lon, countryCode, category, query, radius) {
   // The radius already constrains the search around the device position. Avoid
   // a country-area lookup here: it adds an expensive global area dependency
@@ -1298,14 +1332,43 @@ export default {
           return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
         }
 
-        // Provider-neutral public-transport routing. Transitous runs MOTIS and
-        // aggregates openly published GTFS/NeTEx schedules and GTFS-RT/SIRI data.
+        // Discover real OSM rail stations independently from timetable coverage.
+        // A mapped station does not imply that its operator publishes live schedules.
+        let originStations = [], destinationStations = [];
+        try {
+          [originStations, destinationStations] = await Promise.all([
+            findNearestRailStation(originLat, originLon),
+            findNearestRailStation(destinationLat, destinationLon)
+          ]);
+        } catch (stationError) {
+          console.warn("[HorusTransit] Station discovery unavailable", String(stationError?.message || stationError).slice(0, 120));
+          return json({
+            ok: true, provider: "OpenStreetMap + Transitous / MOTIS", available: false,
+            stationDataAvailable: false,
+            message: "تعذر الوصول إلى بيانات المحطات المفتوحة الآن. حاول مرة أخرى لاحقًا.",
+            originStations: [], destinationStations: [], options: []
+          });
+        }
+        if (!originStations.length || !destinationStations.length) {
+          return json({
+            ok: true, provider: "OpenStreetMap + Transitous / MOTIS", available: false,
+            stationDataAvailable: true,
+            message: !originStations.length
+              ? "لم نعثر على محطة قطار مرسومة في OpenStreetMap ضمن 20 كم من موقعك."
+              : "لم نعثر على محطة قطار مرسومة ضمن 20 كم من الوجهة المحددة.",
+            originStations, destinationStations, options: []
+          });
+        }
+
+        // Query timetable data between the nearest mapped rail stations, not country/city centroids.
+        const planOrigin = originStations[0];
+        const planDestination = destinationStations[0];
         const departureInput = String(body.departureTime || "");
         const departure = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(departureInput)
           ? departureInput : new Date().toISOString();
         const target = new URL("https://api.transitous.org/api/v6/plan");
-        target.searchParams.set("fromPlace", originLat + "," + originLon);
-        target.searchParams.set("toPlace", destinationLat + "," + destinationLon);
+        target.searchParams.set("fromPlace", planOrigin.latitude + "," + planOrigin.longitude);
+        target.searchParams.set("toPlace", planDestination.latitude + "," + planDestination.longitude);
         target.searchParams.set("time", departure);
         target.searchParams.set("transitModes", "RAIL");
         target.searchParams.set("directModes", "WALK");
@@ -1330,7 +1393,11 @@ export default {
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
           console.warn("[HorusTransit] Transitous HTTP", response.status);
-          return json({ ok: false, error: "خدمة جداول النقل المفتوحة غير متاحة مؤقتًا. حاول مرة أخرى." }, 502);
+          return json({
+            ok: true, provider: "OpenStreetMap + Transitous / MOTIS", available: false,
+            stationDataAvailable: true, originStations, destinationStations, options: [],
+            message: "وجدنا محطات قريبة، لكن خدمة جداول القطارات غير متاحة مؤقتًا."
+          });
         }
 
         const isRailLeg = leg => {
@@ -1425,11 +1492,14 @@ export default {
 
         return json({
           ok: true,
-          provider: "Transitous / MOTIS (open transit data)",
+          provider: "OpenStreetMap + Transitous / MOTIS (open data)",
           departureTime: departure,
+          stationDataAvailable: true,
+          originStations,
+          destinationStations,
           available: options.length > 0,
           message: options.length ? null :
-            "لم نعثر على رحلة قطار مطابقة في بيانات الجداول المتاحة لهذه المنطقة والموعد. تغطية النقل تعتمد على نشر الجهات المشغلة لبيانات مفتوحة.",
+            "وجدنا محطات قريبة، لكن لم نعثر على جدول رحلة مطابق في بيانات النقل المفتوحة لهذا الموعد. وجود المحطة لا يضمن توفر جدول منشور.",
           options
         });
       } catch (error) {
