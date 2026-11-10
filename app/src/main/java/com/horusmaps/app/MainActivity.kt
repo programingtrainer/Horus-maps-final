@@ -357,6 +357,52 @@ class MainActivity : ComponentActivity() {
     private var searchMarkerClearRunnable: Runnable? = null
     private var searchMarkerFadeAnimator: ValueAnimator? = null
     private var searchMarker: Marker? = null
+    private var placeFeatureClickListener: org.maplibre.android.maps.MapLibreMap.OnMapClickListener? = null
+
+    private fun installPlaceFeatureClickListener(
+        map: org.maplibre.android.maps.MapLibreMap,
+        onPlaceSelected: (HorusNavigationDestination) -> Unit
+    ) {
+        placeFeatureClickListener?.let { old ->
+            runCatching { map.removeOnMapClickListener(old) }
+        }
+        val listener = org.maplibre.android.maps.MapLibreMap.OnMapClickListener { tappedPoint ->
+            val features = runCatching {
+                map.queryRenderedFeatures(map.projection.toScreenLocation(tappedPoint), null)
+            }.getOrDefault(emptyList())
+            val selected = features.firstNotNullOfOrNull { feature ->
+                val name = listOf("name", "name:ar", "name:en", "name_int")
+                    .firstNotNullOfOrNull { key ->
+                        runCatching { feature.getStringProperty(key)?.trim()?.takeIf(String::isNotBlank) }.getOrNull()
+                    } ?: return@firstNotNullOfOrNull null
+                val properties = feature.properties() ?: return@firstNotNullOfOrNull null
+                val placeKeys = listOf(
+                    "amenity", "shop", "healthcare", "railway", "public_transport",
+                    "highway", "leisure", "tourism", "office", "craft", "aeroway", "place"
+                )
+                if (placeKeys.none(properties::has)) return@firstNotNullOfOrNull null
+                val address = listOf("addr:street", "addr:suburb", "addr:city", "addr:state", "addr:country")
+                    .mapNotNull { key ->
+                        runCatching { feature.getStringProperty(key)?.trim()?.takeIf(String::isNotBlank) }.getOrNull()
+                    }.distinct().joinToString("، ")
+                HorusNavigationDestination(
+                    name = name,
+                    address = address,
+                    latitude = tappedPoint.latitude,
+                    longitude = tappedPoint.longitude
+                )
+            }
+            if (selected == null) {
+                false
+            } else {
+                showSearchMarker(map, tappedPoint.latitude, tappedPoint.longitude, selected.name)
+                onPlaceSelected(selected)
+                true
+            }
+        }
+        placeFeatureClickListener = listener
+        map.addOnMapClickListener(listener)
+    }
 
     private fun bestKnownLocation(map: org.maplibre.android.maps.MapLibreMap): Location? {
         val componentLocation = runCatching {
@@ -1168,6 +1214,11 @@ class MainActivity : ComponentActivity() {
                             }
                             map.setStyle(styleBuilder) { style ->
                                 runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language) }
+                                installPlaceFeatureClickListener(map) { destination ->
+                                    clearCalculatedRoute()
+                                    navigationDestination = destination
+                                    navigationError = null
+                                }
                                 map.animateCamera(
                                 CameraUpdateFactory.newCameraPosition(
                                     org.maplibre.android.camera.CameraPosition.Builder()
@@ -1226,6 +1277,11 @@ class MainActivity : ComponentActivity() {
                                                 Style.Builder().fromUri(remoteConfig.styleUrl)
                                             }
                                             map.setStyle(styleBuilder) { style ->
+                                            installPlaceFeatureClickListener(map) { destination ->
+                                                clearCalculatedRoute()
+                                                navigationDestination = destination
+                                                navigationError = null
+                                            }
                                             // The old repository used this same Liberty vector
                                             // basemap, with localized labels and 3D buildings.
                                             runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language) }
