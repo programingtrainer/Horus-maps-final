@@ -162,41 +162,43 @@ async function findNearbyOpenAirports(latitude, longitude) {
   }).filter(Boolean).sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
 }
 
-function normalizeNavo24Flight(flight) {
-  const airport = value => value && ({
-    iataCode: String(value.iata || "").toUpperCase(),
-    name: String(value.name || value.city || value.iata || ""),
-    cityName: String(value.city || ""),
-    countryCode: String(value.country || ""),
-    latitude: Number.isFinite(Number(value.lat)) ? Number(value.lat) : null,
-    longitude: Number.isFinite(Number(value.lon)) ? Number(value.lon) : null
-  });
-  const origin = airport(flight.origin);
-  const destination = airport(flight.destination);
-  const departureUtc = String(flight.departure_utc || "");
-  const arrivalUtc = String(flight.arrival_utc || "");
-  const durationSeconds = departureUtc && arrivalUtc
-    ? Math.max(0, Math.round((Date.parse(arrivalUtc) - Date.parse(departureUtc)) / 1000))
+function normalizeOagFlight(flight, originAirport, destinationAirport) {
+  const elapsedMinutes = Number(flight.ElapsedTime ?? flight.DurationMinutes ?? flight.durationMinutes);
+  const durationSeconds = Number.isFinite(elapsedMinutes) && elapsedMinutes > 0
+    ? Math.round(elapsedMinutes * 60)
     : 0;
   return {
-    flightNumber: String(flight.flight_no || ""),
-    airline: String(flight.airline?.name || flight.airline?.iata || flight.airline?.icao || ""),
-    airlineIata: String(flight.airline?.iata || ""),
-    origin,
-    destination,
-    departure: String(flight.time_local || departureUtc),
-    departureUtc,
-    arrival: arrivalUtc,
-    durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : 0,
-    timezone: String(flight.tz || ""),
-    stops: Math.max(0, Number(flight.stops) || 0),
-    via: Array.isArray(flight.via) ? flight.via.map(item => String(item.iata || item.name || "")).filter(Boolean) : [],
-    status: String(flight.status || flight.status_info?.label || flight.status_info?.code || ""),
-    updatedAt: String(flight.updated_at || ""),
-    source: String(flight.source || "Navo24"),
-    cargo: Boolean(flight.cargo)
+    flightNumber: String(flight.FlightNumber || flight.flightNumber || flight.FlightNo || ""),
+    airline: String(flight.AirlineName || flight.CarrierName || flight.airline?.name || flight.AirlineIata || ""),
+    airlineIata: String(flight.AirlineIata || flight.CarrierIata || flight.airline?.iata || ""),
+    origin: {
+      iataCode: String(flight.DepartureAirport || flight.origin?.iata || originAirport.iataCode),
+      name: String(flight.DepartureAirportName || flight.origin?.name || originAirport.name),
+      latitude: originAirport.latitude,
+      longitude: originAirport.longitude
+    },
+    destination: {
+      iataCode: String(flight.ArrivalAirport || flight.destination?.iata || destinationAirport.iataCode),
+      name: String(flight.ArrivalAirportName || flight.destination?.name || destinationAirport.name),
+      latitude: destinationAirport.latitude,
+      longitude: destinationAirport.longitude
+    },
+    departure: String(flight.DepartureDateTime || flight.ScheduledDeparture || flight.departure || ""),
+    departureUtc: String(flight.DepartureDateTimeUtc || flight.DepartureDateTimeUTC || ""),
+    arrival: String(flight.ArrivalDateTime || flight.ScheduledArrival || flight.arrival || ""),
+    durationSeconds,
+    timezone: String(flight.DepartureTimeZone || flight.TimeZone || ""),
+    stops: Math.max(0, Number(flight.Stops || flight.StopCount) || 0),
+    via: Array.isArray(flight.IntermediateAirports) ? flight.IntermediateAirports.map(item =>
+      String(item.Iata || item.IATA || item.Code || item.Name || "")
+    ).filter(Boolean) : [],
+    status: String(flight.FlightStatus || flight.Status || flight.status || "جدول مجدول"),
+    updatedAt: String(flight.LastUpdated || flight.UpdatedAt || ""),
+    source: "OAG Flight Info",
+    cargo: false
   };
 }
+
 
 const SEARCH_OVERPASS_ENDPOINTS = [
   "https://overpass.private.coffee/api/interpreter",
@@ -1544,7 +1546,7 @@ export default {
         }
 
         const cacheKey = [
-          "flight-schedules-v2",
+          "flight-schedules-oag-v1",
           originLat.toFixed(2), originLon.toFixed(2),
           destinationLat.toFixed(2), destinationLon.toFixed(2), date
         ].join(":");
@@ -1555,122 +1557,105 @@ export default {
           ]);
           if (!origins.length || !destinations.length) {
             return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 schedules",
+              ok: true, provider: "OpenStreetMap airport data + OAG Flight Info",
               date, available: false, pricesAvailable: false,
               message: "لم نعثر على مطار يحمل رمز IATA في بيانات المطارات المفتوحة بالقرب من إحدى النقطتين.",
               options: [], originAirport: origins[0] || null, destinationAirport: destinations[0] || null
             });
           }
 
-          // Use the nearest public airports first. The schedule source has a small
-          // free-search allowance, so one route query is made per uncached search.
           const originAirport = origins[0];
           const destinationAirport = destinations.find(item => item.iataCode !== originAirport.iataCode);
           if (!destinationAirport) {
             return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 schedules",
+              ok: true, provider: "OpenStreetMap airport data + OAG Flight Info",
               date, available: false, pricesAvailable: false,
               message: "لم نعثر على مطارين مختلفين مناسبين للمسار المطلوب.",
               options: [], originAirport, destinationAirport: null
             });
           }
 
-          const isFreeDemoRoute =
-            (originAirport.iataCode === "HKG" && destinationAirport.iataCode === "FRA") ||
-            (originAirport.iataCode === "FRA" && destinationAirport.iataCode === "HKG");
-          const navo24Key = String(env.NAVO24_API_KEY || "").trim();
-          if (!navo24Key && !isFreeDemoRoute) {
+          const oagKey = String(env.OAG_SUBSCRIPTION_KEY || "").trim();
+          if (!oagKey) {
             return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
+              ok: true, provider: "OpenStreetMap airport data + OAG Flight Info",
               date, available: false, pricesAvailable: false,
               code: "FLIGHT_PROVIDER_KEY_REQUIRED",
-              message: "مصدر Navo24 يتيح مسارًا تجريبيًا واحدًا دون مفتاح (هونغ كونغ ↔ فرانكفورت). البحث في بقية المسارات يحتاج مفتاح API محفوظًا بأمان في Cloudflare Worker.",
+              message: "محرك المطارات جاهز، لكن جداول الرحلات تحتاج مفتاح OAG المجاني. بعد إنشاء الحساب والاشتراك في الخطة المجانية، احفظ المفتاح في Cloudflare باسم OAG_SUBSCRIPTION_KEY.",
               options: [], originAirport, destinationAirport
             });
           }
 
-          const target = new URL("https://api.navo24.com/v1/flight/flights");
-          target.searchParams.set("from", originAirport.iataCode);
-          target.searchParams.set("to", destinationAirport.iataCode);
-          target.searchParams.set("date", date);
-          target.searchParams.set("days", "1");
-          const headers = { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" };
-          if (navo24Key) headers.Authorization = "Bearer " + navo24Key;
+          const target = new URL("https://api.oag.com/flight-instances/");
+          target.searchParams.set("DepartureDateTime", date);
+          target.searchParams.set("ArrivalDateTime", date);
+          target.searchParams.set("DepartureAirport", originAirport.iataCode);
+          target.searchParams.set("ArrivalAirport", destinationAirport.iataCode);
+          target.searchParams.set("CodeType", "IATA,ICAO");
+          target.searchParams.set("FlightType", "scheduled");
+          target.searchParams.set("ServiceType", "Passenger");
+          target.searchParams.set("version", "v2");
+          target.searchParams.set("Limit", "10");
           const response = await fetch(target.toString(), {
-            headers,
-            signal: AbortSignal.timeout(15000)
+            headers: {
+              "Subscription-Key": oagKey,
+              "Accept": "application/json",
+              "User-Agent": SEARCH_USER_AGENT
+            },
+            signal: AbortSignal.timeout(18000)
           });
           const payload = await response.json().catch(() => ({}));
-          const providerError = String(payload?.error?.code || "");
           if (response.status === 401) {
             return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
+              ok: true, provider: "OAG Flight Info",
               date, available: false, pricesAvailable: false,
               code: "FLIGHT_PROVIDER_KEY_INVALID",
-              message: "مفتاح Navo24 غير صالح أو تم إلغاؤه. تحقق من مفتاح NAVO24_API_KEY في Cloudflare Worker.",
+              message: "مفتاح OAG غير صالح أو غير مفعّل. تحقق من اشتراك Flight Info والمفتاح في لوحة OAG.",
               options: [], originAirport, destinationAirport
             });
           }
           if (response.status === 403) {
             return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
+              ok: true, provider: "OAG Flight Info",
               date, available: false, pricesAvailable: false,
               code: "FLIGHT_PROVIDER_ACCESS_DENIED",
-              message: "حساب Navo24 أو المفتاح الحالي لا يملك صلاحية الوصول إلى جداول الرحلات.",
-              options: [], originAirport, destinationAirport
-            });
-          }
-          if (response.status === 402 || providerError === "INSUFFICIENT_CREDITS") {
-            return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
-              date, available: false, pricesAvailable: false,
-              code: "FLIGHT_PROVIDER_PAID_CREDITS_REQUIRED",
-              message: "مصدر جداول الرحلات رفض الطلب لعدم توفر رصيد كافٍ. لم يتم شراء رصيد أو تنفيذ أي عملية مدفوعة.",
+              message: "اشتراك OAG الحالي لا يملك صلاحية Flight Info. تأكد من تفعيل الخطة المجانية للواجهة المطلوبة.",
               options: [], originAirport, destinationAirport
             });
           }
           if (response.status === 429) {
             return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
+              ok: true, provider: "OAG Flight Info",
               date, available: false, pricesAvailable: false,
-              code: "FLIGHT_PROVIDER_RATE_LIMITED",
-              message: "وصل مصدر جداول الرحلات إلى حد الطلبات المسموح به. حاول لاحقًا.",
+              code: "FLIGHT_PROVIDER_QUOTA_REACHED",
+              message: "وصلت إلى حد استخدام OAG المتاح لهذه الفترة. النتائج المحفوظة تظل متاحة حتى انتهاء التخزين المؤقت.",
               options: [], originAirport, destinationAirport
             });
           }
-          if (response.status === 404 || providerError === "not_covered") {
-            return json({
-              ok: true, provider: "OpenStreetMap airport data + Navo24 flight schedules",
-              date, available: false, pricesAvailable: false,
-              code: "ROUTE_NOT_COVERED",
-              message: "المطارات معروفة، لكن مصدر الجداول لا يغطي هذا المسار حاليًا.",
-              options: [], originAirport, destinationAirport
-            });
-          }
-          if (!response.ok) throw new Error("Navo24 flight schedule HTTP " + response.status);
+          if (!response.ok) throw new Error("OAG Flight Info HTTP " + response.status);
           const flights = Array.isArray(payload.data) ? payload.data : [];
-          const options = flights.filter(item => item && item.cargo !== true).map(normalizeNavo24Flight)
-            .filter(item => item.flightNumber && item.origin?.iataCode && item.destination?.iataCode)
-            .sort((a, b) => String(a.departure).localeCompare(String(b.departure)));
+          const options = flights.map(item => normalizeOagFlight(item, originAirport, destinationAirport))
+            .filter(item => item.flightNumber && item.departure && item.arrival)
+            .sort((a, b) => a.departure.localeCompare(b.departure));
           return json({
             ok: true,
-            provider: "OpenStreetMap airport data + Navo24 (free schedule feed)",
+            provider: "OpenStreetMap airport data + OAG Flight Info (free tier)",
             date,
             available: options.length > 0,
             pricesAvailable: false,
             message: options.length
-              ? "هذه مواعيد جداول منشورة وليست عروض أسعار أو تأكيدًا لتوفر المقاعد. تحقق من شركة الطيران قبل السفر."
-              : "لم يعثر مصدر الجداول المفتوح على رحلات منشورة لهذا المسار والتاريخ.",
+              ? "هذه مواعيد وجداول رحلات منشورة من OAG وليست عروض أسعار أو تأكيدًا لتوفر المقاعد. تحقق من شركة الطيران قبل السفر."
+              : "لم يعثر OAG على رحلات ركاب مجدولة مباشرة بين المطارين في التاريخ المحدد.",
             originAirport,
             destinationAirport,
             options
           });
         });
       } catch (error) {
-        console.error("[HorusFlights] Open flight search failed", String(error?.message || error).slice(0, 160));
+        console.error("[HorusFlights] OAG flight search failed", String(error?.message || error).slice(0, 160));
         return json({
           ok: false,
-          provider: "OpenStreetMap airport data + Navo24 schedules",
+          provider: "OAG Flight Info",
           code: "FLIGHT_SEARCH_FAILED",
           error: error?.message || "تعذر البحث عن رحلات الطيران الآن."
         }, 503);
