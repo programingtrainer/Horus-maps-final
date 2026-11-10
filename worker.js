@@ -117,6 +117,65 @@ async function getAuthenticatedUser(request, env) {
 
 
 const SEARCH_USER_AGENT = "HorusMaps/0.1 (Android map search; https://github.com/programingtrainer/Horus-maps-final)";
+
+let amadeusCachedToken = null;
+let amadeusTokenExpiresAt = 0;
+
+async function getAmadeusAccessToken(env) {
+  const clientId = String(env.AMADEUS_CLIENT_ID || "");
+  const clientSecret = String(env.AMADEUS_CLIENT_SECRET || "");
+  if (!clientId || !clientSecret) {
+    const error = new Error("Flight search is not configured: add AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET Worker secrets.");
+    error.status = 503;
+    error.code = "FLIGHT_PROVIDER_NOT_CONFIGURED";
+    throw error;
+  }
+  if (amadeusCachedToken && Date.now() < amadeusTokenExpiresAt - 60000) return amadeusCachedToken;
+  const base = String(env.AMADEUS_BASE_URL || "https://api.amadeus.com").replace(/\/$/, "");
+  const response = await fetch(base + "/v1/security/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: clientId,
+      client_secret: clientSecret
+    }),
+    signal: AbortSignal.timeout(12000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.access_token) {
+    const error = new Error("Flight provider authentication failed.");
+    error.status = response.status === 401 ? 502 : 503;
+    throw error;
+  }
+  amadeusCachedToken = payload.access_token;
+  amadeusTokenExpiresAt = Date.now() + Math.max(60, Number(payload.expires_in) || 1800) * 1000;
+  return amadeusCachedToken;
+}
+
+async function findNearbyAirports(env, token, latitude, longitude) {
+  const base = String(env.AMADEUS_BASE_URL || "https://api.amadeus.com").replace(/\/$/, "");
+  const target = new URL(base + "/v1/reference-data/locations/airports");
+  target.searchParams.set("latitude", String(latitude));
+  target.searchParams.set("longitude", String(longitude));
+  target.searchParams.set("radius", "500");
+  target.searchParams.set("sort", "distance");
+  target.searchParams.set("page[limit]", "5");
+  const response = await fetch(target, {
+    headers: { "Authorization": "Bearer " + token, "Accept": "application/json" },
+    signal: AbortSignal.timeout(12000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error("Airport lookup failed (HTTP " + response.status + ").");
+  return (payload.data || []).filter(item => /^[A-Z]{3}$/.test(String(item.iataCode || "")))
+    .slice(0, 3).map(item => ({
+      iataCode: item.iataCode,
+      name: item.name || item.address?.cityName || item.iataCode,
+      cityName: item.address?.cityName || "",
+      countryCode: item.address?.countryCode || ""
+    }));
+}
+
 const SEARCH_OVERPASS_ENDPOINTS = [
   "https://overpass.private.coffee/api/interpreter",
   "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
@@ -1219,6 +1278,157 @@ export default {
         merged.sort((left, right) => scoreFeature(right) - scoreFeature(left));
         return json({ ok: true, type: "FeatureCollection", features: merged.slice(0, 24) });
       });
+    }
+
+
+    if (url.pathname === "/v1/search/transit" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const originLat = validCoordinate(body.originLatitude, -90, 90);
+        const originLon = validCoordinate(body.originLongitude, -180, 180);
+        const destinationLat = validCoordinate(body.destinationLatitude, -90, 90);
+        const destinationLon = validCoordinate(body.destinationLongitude, -180, 180);
+        if ([originLat, originLon, destinationLat, destinationLon].some(value => value === null)) {
+          return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
+        }
+        if (!env.TRANSITLAND_API_KEY) {
+          return json({
+            ok: false, providerConfigured: false, code: "TRANSIT_PROVIDER_NOT_CONFIGURED",
+            error: "محرك القطارات يحتاج مفتاح Transitland API. أضف TRANSITLAND_API_KEY إلى أسرار Worker."
+          }, 503);
+        }
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || "")) ? String(body.date) : new Date().toISOString().slice(0, 10);
+        const time = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(body.time || "")) ? String(body.time) : new Date().toISOString().slice(11, 16);
+        const target = new URL("https://transit.land/api/v2/routing/otp/plan");
+        target.searchParams.set("fromPlace", originLat + "," + originLon);
+        target.searchParams.set("toPlace", destinationLat + "," + destinationLon);
+        target.searchParams.set("date", date);
+        target.searchParams.set("time", time);
+        target.searchParams.set("maxItineraries", "5");
+        target.searchParams.set("showIntermediateStops", "true");
+        const response = await fetch(target, {
+          headers: { "apikey": env.TRANSITLAND_API_KEY, "Accept": "application/json", "User-Agent": SEARCH_USER_AGENT },
+          signal: AbortSignal.timeout(20000)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          console.warn("[HorusTransit] Provider HTTP", response.status);
+          return json({ ok: false, error: "تعذر الوصول إلى بيانات القطارات حاليًا. حاول لاحقًا." }, 502);
+        }
+        const itineraries = payload.plan?.itineraries || [];
+        const options = itineraries.map((itinerary, index) => ({
+          id: String(index + 1),
+          startTime: itinerary.startTime || null,
+          endTime: itinerary.endTime || null,
+          durationSeconds: Number(itinerary.duration) || 0,
+          distanceMeters: Math.round(Number(itinerary.distance) || 0),
+          transfers: Number(itinerary.transfers) || 0,
+          legs: (itinerary.legs || []).map(leg => ({
+            mode: String(leg.mode || ""),
+            agencyName: String(leg.agencyName || ""),
+            routeName: String(leg.routeShortName || leg.routeLongName || leg.route || ""),
+            headsign: String(leg.headsign || ""),
+            from: String(leg.from?.name || leg.from?.stop?.name || ""),
+            to: String(leg.to?.name || leg.to?.stop?.name || ""),
+            departure: leg.startTime || null,
+            arrival: leg.endTime || null,
+            durationSeconds: Number(leg.duration) || 0
+          }))
+        }));
+        return json({
+          ok: true, provider: "Transitland", date, time,
+          available: options.length > 0,
+          message: options.length ? null : "لم نعثر على رحلة قطار أو نقل عام متاحة بين النقطتين في بيانات المنطقة والتوقيت المحدد.",
+          options
+        });
+      } catch (error) {
+        console.error("[HorusTransit] Search failed", String(error?.message || error).slice(0, 160));
+        return json({ ok: false, error: "تعذر البحث عن القطارات الآن. حاول مرة أخرى." }, Number(error?.status) || 503);
+      }
+    }
+
+    if (url.pathname === "/v1/search/flights" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const originLat = validCoordinate(body.originLatitude, -90, 90);
+        const originLon = validCoordinate(body.originLongitude, -180, 180);
+        const destinationLat = validCoordinate(body.destinationLatitude, -90, 90);
+        const destinationLon = validCoordinate(body.destinationLongitude, -180, 180);
+        if ([originLat, originLon, destinationLat, destinationLon].some(value => value === null)) {
+          return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
+        }
+        const date = String(body.date || "");
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < new Date().toISOString().slice(0, 10)) {
+          return json({ ok: false, error: "حدد تاريخ سفر صحيحًا اليوم أو في المستقبل." }, 400);
+        }
+        const token = await getAmadeusAccessToken(env);
+        const [origins, destinations] = await Promise.all([
+          findNearbyAirports(env, token, originLat, originLon),
+          findNearbyAirports(env, token, destinationLat, destinationLon)
+        ]);
+        if (!origins.length || !destinations.length) {
+          return json({ ok: true, provider: "Amadeus", date, available: false,
+            message: "لم نعثر على مطارات تجارية مناسبة بالقرب من إحدى النقطتين.", options: [] });
+        }
+        const base = String(env.AMADEUS_BASE_URL || "https://api.amadeus.com").replace(/\/$/, "");
+        const pairs = [];
+        for (const origin of origins) for (const destination of destinations) {
+          if (origin.iataCode !== destination.iataCode) pairs.push({ origin, destination });
+        }
+        const offers = await Promise.all(pairs.slice(0, 6).map(async pair => {
+          const target = new URL(base + "/v2/shopping/flight-offers");
+          target.searchParams.set("originLocationCode", pair.origin.iataCode);
+          target.searchParams.set("destinationLocationCode", pair.destination.iataCode);
+          target.searchParams.set("departureDate", date);
+          target.searchParams.set("adults", "1");
+          target.searchParams.set("max", "5");
+          const response = await fetch(target, {
+            headers: { "Authorization": "Bearer " + token, "Accept": "application/json" },
+            signal: AbortSignal.timeout(16000)
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            console.warn("[HorusFlights] Offer search HTTP", response.status);
+            return [];
+          }
+          return (payload.data || []).map(offer => {
+            const itinerary = offer.itineraries?.[0] || {};
+            const segments = (itinerary.segments || []).map(segment => ({
+              carrier: segment.carrierCode || "",
+              flightNumber: segment.number || "",
+              from: segment.departure?.iataCode || "",
+              to: segment.arrival?.iataCode || "",
+              departure: segment.departure?.at || "",
+              arrival: segment.arrival?.at || "",
+              duration: segment.duration || ""
+            }));
+            return {
+              id: String(offer.id || ""),
+              origin: pair.origin,
+              destination: pair.destination,
+              duration: itinerary.duration || "",
+              stops: Math.max(0, segments.length - 1),
+              currency: offer.price?.currency || "",
+              price: offer.price?.grandTotal || offer.price?.total || "",
+              segments
+            };
+          });
+        }));
+        const options = offers.flat().sort((a, b) => Number(a.price) - Number(b.price)).slice(0, 10);
+        return json({
+          ok: true, provider: "Amadeus", date, available: options.length > 0,
+          message: options.length ? null : "لم نعثر على عروض طيران متاحة من المطارات القريبة في التاريخ المحدد.",
+          options
+        });
+      } catch (error) {
+        console.error("[HorusFlights] Search failed", String(error?.message || error).slice(0, 160));
+        return json({
+          ok: false,
+          providerConfigured: error?.code !== "FLIGHT_PROVIDER_NOT_CONFIGURED",
+          code: error?.code || "FLIGHT_SEARCH_FAILED",
+          error: error?.message || "تعذر البحث عن رحلات الطيران الآن."
+        }, Number(error?.status) || 503);
+      }
     }
 
     if (url.pathname === "/v1/search/route" && request.method === "POST") {
