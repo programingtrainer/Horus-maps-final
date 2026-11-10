@@ -1301,7 +1301,7 @@ export default {
         target.searchParams.set("fromPlace", originLat + "," + originLon);
         target.searchParams.set("toPlace", destinationLat + "," + destinationLon);
         target.searchParams.set("time", departure);
-        target.searchParams.set("transitModes", "TRANSIT");
+        target.searchParams.set("transitModes", "RAIL");
         target.searchParams.set("directModes", "WALK");
         target.searchParams.set("maxTransfers", "3");
         target.searchParams.set("numItineraries", "5");
