@@ -133,7 +133,7 @@ fun HorusNavigationPanel(
             if (!error.isNullOrBlank()) {
                 Text(error, color = Color(0xFFB42318), fontSize = 11.sp)
             }
-            if (!navigating) {
+            if (!navigating && selectedMode in setOf("driving", "walking")) {
                 Button(
                     onClick = if (route == null) onCalculate else onStart,
                     enabled = !calculating && selectedMode in setOf("driving", "walking"),
