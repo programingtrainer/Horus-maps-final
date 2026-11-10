@@ -349,6 +349,55 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
     }
 }
 
+private data class HorusNavigationProgress(val remainingMeters: Int, val remainingSeconds: Int)
+
+private fun calculateRouteProgress(
+    routePoints: List<LatLng>,
+    currentLocation: Location,
+    route: HorusRouteResult
+): HorusNavigationProgress? {
+    if (routePoints.size < 2) return null
+
+    val latitudeScale = 110540.0
+    val longitudeScale = 111320.0 * kotlin.math.cos(Math.toRadians(currentLocation.latitude)).coerceAtLeast(0.01)
+    var traversedMeters = 0.0
+    var bestDistanceSquared = Double.POSITIVE_INFINITY
+    var bestAlongRoute = 0.0
+
+    for (index in 0 until routePoints.lastIndex) {
+        val start = routePoints[index]
+        val end = routePoints[index + 1]
+        val ax = (start.longitude - currentLocation.longitude) * longitudeScale
+        val ay = (start.latitude - currentLocation.latitude) * latitudeScale
+        val bx = (end.longitude - currentLocation.longitude) * longitudeScale
+        val by = (end.latitude - currentLocation.latitude) * latitudeScale
+        val dx = bx - ax
+        val dy = by - ay
+        val segmentLengthSquared = dx * dx + dy * dy
+        val fraction = if (segmentLengthSquared <= 0.0001) 0.0 else
+            ((-(ax * dx + ay * dy)) / segmentLengthSquared).coerceIn(0.0, 1.0)
+        val nearestX = ax + fraction * dx
+        val nearestY = ay + fraction * dy
+        val distanceSquared = nearestX * nearestX + nearestY * nearestY
+        val segmentLength = FloatArray(1).also { output ->
+            Location.distanceBetween(start.latitude, start.longitude, end.latitude, end.longitude, output)
+        }[0].toDouble()
+
+        if (distanceSquared < bestDistanceSquared) {
+            bestDistanceSquared = distanceSquared
+            bestAlongRoute = traversedMeters + segmentLength * fraction
+        }
+        traversedMeters += segmentLength
+    }
+
+    if (traversedMeters <= 0.0) return null
+    val remainingRatio = (1.0 - bestAlongRoute / traversedMeters).coerceIn(0.0, 1.0)
+    return HorusNavigationProgress(
+        remainingMeters = (route.distanceMeters * remainingRatio).toInt().coerceAtLeast(0),
+        remainingSeconds = (route.durationSeconds * remainingRatio).toInt().coerceAtLeast(0)
+    )
+}
+
 class MainActivity : ComponentActivity() {
     private val searchBoundaryHandler = Handler(Looper.getMainLooper())
     private var searchBoundaryAnimator: ValueAnimator? = null
@@ -674,6 +723,8 @@ class MainActivity : ComponentActivity() {
                 var navigationDestination by remember { mutableStateOf<HorusNavigationDestination?>(null) }
                 var selectedTravelMode by remember { mutableStateOf("driving") }
                 var calculatedRoute by remember { mutableStateOf<HorusRouteResult?>(null) }
+                var routeCoordinates by remember { mutableStateOf<List<LatLng>>(emptyList()) }
+                var navigationProgress by remember { mutableStateOf<HorusNavigationProgress?>(null) }
                 var routePolyline by remember { mutableStateOf<Polyline?>(null) }
                 var routeLoading by remember { mutableStateOf(false) }
                 var navigationStarted by remember { mutableStateOf(false) }
@@ -1086,6 +1137,8 @@ class MainActivity : ComponentActivity() {
                     mapLibreMap?.let { map -> routePolyline?.let { runCatching { map.removeAnnotation(it) } } }
                     routePolyline = null
                     calculatedRoute = null
+                    routeCoordinates = emptyList()
+                    navigationProgress = null
                     navigationStarted = false
                 }
 
@@ -1164,7 +1217,11 @@ class MainActivity : ComponentActivity() {
                                     .color(android.graphics.Color.rgb(25, 118, 210))
                                     .width(6f)
                             )
+                            routeCoordinates = points
                             calculatedRoute = result
+                            bestKnownLocation(map)?.let { location ->
+                                navigationProgress = calculateRouteProgress(points, location, result)
+                            }
                         } catch (error: CancellationException) {
                             throw error
                         } catch (error: Exception) {
@@ -1179,6 +1236,11 @@ class MainActivity : ComponentActivity() {
                 fun beginNavigation() {
                     if (calculatedRoute == null) return
                     navigationStarted = true
+                    val activeRoute = calculatedRoute
+                    val activeLocation = mapLibreMap?.let { bestKnownLocation(it) }
+                    if (activeRoute != null && activeLocation != null) {
+                        navigationProgress = calculateRouteProgress(routeCoordinates, activeLocation, activeRoute)
+                    }
                     mapLibreMap?.let { map ->
                         runCatching {
                             if (map.locationComponent.isLocationComponentActivated) {
@@ -1187,6 +1249,45 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                LaunchedEffect(navigationStarted, calculatedRoute, routeCoordinates) {
+                    if (!navigationStarted || calculatedRoute == null || routeCoordinates.size < 2) {
+                        navigationProgress = null
+                        return@LaunchedEffect
+                    }
+                    val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    if (!fine && !coarse) {
+                        navigationError = "انقطع إذن الموقع؛ اسمح بالوصول للموقع لمتابعة تحديث المسافة المتبقية."
+                        return@LaunchedEffect
+                    }
+                    val manager = getSystemService(LOCATION_SERVICE) as LocationManager
+                    val listener = object : LocationListener {
+                        override fun onLocationChanged(location: Location) {
+                            val activeRoute = calculatedRoute ?: return
+                            navigationProgress = calculateRouteProgress(routeCoordinates, location, activeRoute)
+                        }
+                    }
+                    val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+                        .filter { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+                    try {
+                        bestKnownLocation(mapLibreMap ?: return@LaunchedEffect)?.let { location ->
+                            navigationProgress = calculateRouteProgress(routeCoordinates, location, calculatedRoute!!)
+                        }
+                        providers.forEach { provider ->
+                            manager.requestLocationUpdates(provider, 1000L, 3f, listener, Looper.getMainLooper())
+                        }
+                    } catch (security: SecurityException) {
+                        navigationError = "يلزم السماح بإذن الموقع لتحديث الملاحة."
+                    } catch (error: Exception) {
+                        android.util.Log.w("HorusMaps", "Navigation location updates unavailable", error)
+                    }
+                    try {
+                        kotlinx.coroutines.awaitCancellation()
+                    } finally {
+                        runCatching { manager.removeUpdates(listener) }
+                    }
+                }
+
                 LaunchedEffect(Unit) {
                     HorusRemoteConfig.refresh(this@MainActivity) { updated ->
                         remoteConfig = updated
@@ -1349,6 +1450,15 @@ class MainActivity : ComponentActivity() {
                                     onCancel = { cancelNavigation() }
                                 )
                             }
+                        }
+
+                        if (navigationStarted && navigationProgress != null) {
+                            HorusNavigationProgressCard(
+                                remainingMeters = navigationProgress!!.remainingMeters,
+                                remainingSeconds = navigationProgress!!.remainingSeconds,
+                                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                                    .padding(top = 74.dp).fillMaxWidth(0.90f)
+                            )
                         }
 
                         HorusMapSearchPanel(
