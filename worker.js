@@ -1708,7 +1708,7 @@ export default {
           ]);
           if (!origins.length || !destinations.length) {
             return json({
-              ok: true, provider: "OpenStreetMap airport data + OAG Flight Info",
+              ok: true, provider: ignavConfigured ? "OpenStreetMap + Ignav" : "OpenStreetMap airport data + OAG Flight Info",
               date, available: false, pricesAvailable: false,
               message: "لم نعثر على مطار يحمل رمز IATA في بيانات المطارات المفتوحة بالقرب من إحدى النقطتين.",
               options: [], originAirport: origins[0] || null, destinationAirport: destinations[0] || null
@@ -1863,10 +1863,10 @@ export default {
           });
         });
       } catch (error) {
-        console.error("[HorusFlights] OAG flight search failed", String(error?.message || error).slice(0, 160));
+        console.error("[HorusFlights] Flight search failed", String(error?.message || error).slice(0, 160));
         return json({
           ok: false,
-          provider: "OAG Flight Info",
+          provider: "HorusMaps flight search",
           code: "FLIGHT_SEARCH_FAILED",
           error: error?.message || "تعذر البحث عن رحلات الطيران الآن."
         }, 503);
@@ -1909,7 +1909,8 @@ export default {
               const rawUrl = String(link.url || "").trim();
               if (!rawUrl) return null;
               try {
-                const url = new URL(/^https:\/\//i.test(rawUrl) ? rawUrl : "https://" + rawUrl);
+                const hasScheme = /^https?:\/\//i.test(rawUrl);
+                const url = new URL(hasScheme ? rawUrl : "https://" + rawUrl);
                 if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return null;
                 return {
                   providerName: String(link.provider_name || "موقع الحجز"),
