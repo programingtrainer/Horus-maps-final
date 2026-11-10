@@ -57,6 +57,8 @@ fun HorusNavigationPanel(
     destinationStations: List<HorusTransitStation> = emptyList(),
     onRouteToOriginStation: (HorusTransitStation) -> Unit = {},
     waitingForTrainArrival: Boolean = false,
+    intercityItineraryLines: List<String> = emptyList(),
+    intercityItineraryMessage: String? = null,
     onConfirmTrainArrival: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -94,7 +96,19 @@ fun HorusNavigationPanel(
                 }
             }
             if (waitingForTrainArrival) {
-                Text("اتبع رحلة القطار إلى محطة الوصول المحددة، ثم أكّد وصولك للانتقال إلى الجزء الأخير من الرحلة.",
+                Text("رحلة القطار إلى ${destination.name}", color = Color(0xFF172B45), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                if (!intercityItineraryMessage.isNullOrBlank()) {
+                    Text(intercityItineraryMessage, color = Color(0xFFB54708), fontSize = 10.sp)
+                }
+                Column(
+                    modifier = Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    intercityItineraryLines.forEach { line ->
+                        Text(line, color = Color(0xFF475467), fontSize = 10.sp, lineHeight = 14.sp)
+                    }
+                }
+                Text("اتبع مواعيد الرحلة أعلاه حتى محطة الوصول، ثم أكّد وصولك للانتقال إلى الجزء الأخير من الرحلة.",
                     color = Color(0xFF475467), fontSize = 11.sp)
                 Button(
                     onClick = onConfirmTrainArrival,
