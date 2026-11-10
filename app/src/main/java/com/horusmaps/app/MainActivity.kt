@@ -1221,11 +1221,17 @@ class MainActivity : ComponentActivity() {
 
                 fun selectNearbyResult(result: HorusNearbyPlace) {
                     clearCalculatedRoute()
+                    transportSearchJob?.cancel()
+                    transportSearchResult = null
+                    transportSearchError = null
+                    transportLoading = false
+                    selectedTravelMode = "driving"
                     navigationDestination = HorusNavigationDestination(
                         name = result.name,
                         address = listOf(result.address, result.region, result.country).filter { it.isNotBlank() }.distinct().joinToString("، "),
                         latitude = result.latitude,
-                        longitude = result.longitude
+                        longitude = result.longitude,
+                        isLocalPlace = true
                     )
                     mapLibreMap?.let { map ->
                         map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 16.5), 900)
@@ -1625,6 +1631,7 @@ class MainActivity : ComponentActivity() {
                                     transportOptions = transportSearchResult?.options.orEmpty(),
                                     onSearchTransport = { searchSelectedTransport() },
                                     onPickDate = { chooseTravelDate() },
+                                    allowIntercityModes = navigationDestination?.isLocalPlace != true,
                                     onCalculate = { calculateSelectedRoute() },
                                     onStart = { beginNavigation() },
                                     onCancel = { cancelNavigation() }
