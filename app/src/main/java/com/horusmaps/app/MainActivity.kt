@@ -349,7 +349,25 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
     }
 }
 
-private data class HorusNavigationProgress(val remainingMeters: Int, val remainingSeconds: Int)
+private data class HorusNavigationProgress(
+    val remainingMeters: Int,
+    val remainingSeconds: Int,
+    val traveledMeters: Int
+)
+private data class HorusNavigationManeuverState(
+    val current: HorusRouteStep,
+    val next: HorusRouteStep?,
+    val distanceToCurrentMeters: Int
+)
+private fun selectNavigationManeuver(route: HorusRouteResult, progress: HorusNavigationProgress): HorusNavigationManeuverState? {
+    val maneuvers = route.steps.filterNot { it.type == "depart" || it.type == "arrive" }
+    if (maneuvers.isEmpty()) return null
+    val index = maneuvers.indexOfFirst { it.distanceFromStartMeters >= progress.traveledMeters - 20 }
+        .let { if (it < 0) maneuvers.lastIndex else it }
+    val current = maneuvers[index]
+    return HorusNavigationManeuverState(current, maneuvers.getOrNull(index + 1),
+        (current.distanceFromStartMeters - progress.traveledMeters).coerceAtLeast(0))
+}
 
 private fun calculateRouteProgress(
     routePoints: List<LatLng>,
@@ -394,7 +412,8 @@ private fun calculateRouteProgress(
     val remainingRatio = (1.0 - bestAlongRoute / traversedMeters).coerceIn(0.0, 1.0)
     return HorusNavigationProgress(
         remainingMeters = (route.distanceMeters * remainingRatio).toInt().coerceAtLeast(0),
-        remainingSeconds = (route.durationSeconds * remainingRatio).toInt().coerceAtLeast(0)
+        remainingSeconds = (route.durationSeconds * remainingRatio).toInt().coerceAtLeast(0),
+        traveledMeters = (route.distanceMeters * (1.0 - remainingRatio)).toInt().coerceAtLeast(0)
     )
 }
 
@@ -725,6 +744,7 @@ class MainActivity : ComponentActivity() {
                 var calculatedRoute by remember { mutableStateOf<HorusRouteResult?>(null) }
                 var routeCoordinates by remember { mutableStateOf<List<LatLng>>(emptyList()) }
                 var navigationProgress by remember { mutableStateOf<HorusNavigationProgress?>(null) }
+                var navigationManeuver by remember { mutableStateOf<HorusNavigationManeuverState?>(null) }
                 var routePolyline by remember { mutableStateOf<Polyline?>(null) }
                 var routeLoading by remember { mutableStateOf(false) }
                 var navigationStarted by remember { mutableStateOf(false) }
@@ -1139,6 +1159,7 @@ class MainActivity : ComponentActivity() {
                     calculatedRoute = null
                     routeCoordinates = emptyList()
                     navigationProgress = null
+                    navigationManeuver = null
                     navigationStarted = false
                 }
 
@@ -1220,7 +1241,9 @@ class MainActivity : ComponentActivity() {
                             routeCoordinates = points
                             calculatedRoute = result
                             bestKnownLocation(map)?.let { location ->
-                                navigationProgress = calculateRouteProgress(points, location, result)
+                                val progress = calculateRouteProgress(points, location, result)
+                                navigationProgress = progress
+                                navigationManeuver = progress?.let { selectNavigationManeuver(result, it) }
                             }
                         } catch (error: CancellationException) {
                             throw error
@@ -1239,7 +1262,9 @@ class MainActivity : ComponentActivity() {
                     val activeRoute = calculatedRoute
                     val activeLocation = mapLibreMap?.let { bestKnownLocation(it) }
                     if (activeRoute != null && activeLocation != null) {
-                        navigationProgress = calculateRouteProgress(routeCoordinates, activeLocation, activeRoute)
+                        val progress = calculateRouteProgress(routeCoordinates, activeLocation, activeRoute)
+                        navigationProgress = progress
+                        navigationManeuver = progress?.let { selectNavigationManeuver(activeRoute, it) }
                     }
                     mapLibreMap?.let { map ->
                         runCatching {
@@ -1264,14 +1289,18 @@ class MainActivity : ComponentActivity() {
                     val listener = object : LocationListener {
                         override fun onLocationChanged(location: Location) {
                             val activeRoute = calculatedRoute ?: return
-                            navigationProgress = calculateRouteProgress(routeCoordinates, location, activeRoute)
+                            val progress = calculateRouteProgress(routeCoordinates, location, activeRoute)
+                            navigationProgress = progress
+                            navigationManeuver = progress?.let { selectNavigationManeuver(activeRoute, it) }
                         }
                     }
                     val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
                         .filter { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
                     try {
                         bestKnownLocation(mapLibreMap ?: return@LaunchedEffect)?.let { location ->
-                            navigationProgress = calculateRouteProgress(routeCoordinates, location, calculatedRoute!!)
+                            val progress = calculateRouteProgress(routeCoordinates, location, calculatedRoute!!)
+                            navigationProgress = progress
+                            navigationManeuver = progress?.let { selectNavigationManeuver(calculatedRoute!!, it) }
                         }
                         providers.forEach { provider ->
                             manager.requestLocationUpdates(provider, 1000L, 3f, listener, Looper.getMainLooper())
@@ -1493,12 +1522,23 @@ class MainActivity : ComponentActivity() {
                         )
 
                         if (navigationStarted && navigationProgress != null) {
-                            HorusNavigationProgressCard(
-                                remainingMeters = navigationProgress!!.remainingMeters,
-                                remainingSeconds = navigationProgress!!.remainingSeconds,
+                            Column(
                                 modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
-                                    .padding(top = 74.dp).fillMaxWidth(0.90f)
-                            )
+                                    .padding(top = 74.dp).fillMaxWidth(0.90f),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                HorusNavigationProgressCard(
+                                    remainingMeters = navigationProgress!!.remainingMeters,
+                                    remainingSeconds = navigationProgress!!.remainingSeconds
+                                )
+                                navigationManeuver?.let { maneuver ->
+                                    HorusNavigationManeuverCard(
+                                        maneuver = maneuver.current,
+                                        nextManeuver = maneuver.next,
+                                        distanceToManeuverMeters = maneuver.distanceToCurrentMeters
+                                    )
+                                }
+                            }
                         }
 
                         // MapLibre-style plain wordmark in the lower-right corner (no badge or info icon).
