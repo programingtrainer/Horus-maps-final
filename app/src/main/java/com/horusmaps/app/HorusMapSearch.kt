@@ -144,6 +144,18 @@ data class HorusAirport(
     val distanceMeters: Int
 )
 
+data class HorusPriceOffer(
+    val price: Double,
+    val currency: String,
+    val airlineIata: String,
+    val flightNumber: String,
+    val departureAt: String,
+    val stops: Int,
+    val durationMinutes: Int,
+    val foundAt: String,
+    val bookingUrl: String
+)
+
 data class HorusTransportSearchResult(
     val provider: String,
     val available: Boolean,
@@ -153,7 +165,9 @@ data class HorusTransportSearchResult(
     val originStations: List<HorusTransitStation> = emptyList(),
     val destinationStations: List<HorusTransitStation> = emptyList(),
     val originAirport: HorusAirport? = null,
-    val destinationAirport: HorusAirport? = null
+    val destinationAirport: HorusAirport? = null,
+    val priceMessage: String? = null,
+    val priceOffers: List<HorusPriceOffer> = emptyList()
 )
 
 data class HorusRouteResult(
@@ -479,7 +493,27 @@ object HorusMapSearchApi {
                 }
                 option.optString("status").takeIf { it.isNotBlank() }?.let { add("الحالة المنشورة: $it") }
                 option.optString("updatedAt").takeIf { it.isNotBlank() }?.let { add("آخر تحديث للبيانات: $it") }
-                add("السعر غير متاح من مصدر الجداول المجاني.")
+            }
+        }
+        val priceJson = root.optJSONArray("priceOffers") ?: JSONArray()
+        val priceOffers = buildList {
+            for (index in 0 until priceJson.length()) {
+                val offer = priceJson.optJSONObject(index) ?: continue
+                val price = offer.optDouble("price", Double.NaN)
+                if (!price.isFinite() || price <= 0.0) continue
+                add(
+                    HorusPriceOffer(
+                        price = price,
+                        currency = offer.optString("currency", "USD"),
+                        airlineIata = offer.optString("airlineIata"),
+                        flightNumber = offer.optString("flightNumber"),
+                        departureAt = offer.optString("departureAt"),
+                        stops = offer.optInt("stops"),
+                        durationMinutes = offer.optInt("durationMinutes"),
+                        foundAt = offer.optString("foundAt"),
+                        bookingUrl = offer.optString("bookingUrl")
+                    )
+                )
             }
         }
         HorusTransportSearchResult(
@@ -488,7 +522,9 @@ object HorusMapSearchApi {
             message = root.optString("message").takeIf { it.isNotBlank() && it != "null" },
             options = lines,
             originAirport = originAirport,
-            destinationAirport = destinationAirport
+            destinationAirport = destinationAirport,
+            priceMessage = root.optString("priceMessage").takeIf { it.isNotBlank() && it != "null" },
+            priceOffers = priceOffers
         )
     }
 
