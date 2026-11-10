@@ -13,6 +13,22 @@ The Worker endpoint `POST /v1/search/flights` accepts origin/destination coordin
 
 The Android client displays schedules and recent fare observations separately. Fare observations are not asserted to belong to the exact same flight instance as an OAG schedule unless the identifiers match.
 
+## Ignav fare and itinerary provider
+
+When the Worker secret `IGNAV_API_KEY` is configured, Ignav is the primary source for flight itineraries, fare observations, and booking handoffs.
+
+- The Worker calls `POST /api/fares/one-way` server-side with the nearest OSM-discovered IATA airport pair, travel date, economy cabin, and Saudi market (`SA`).
+- Fare results are cached in the Worker KV for 30 minutes. This matches Ignav's stated reuse window and avoids spending a request for repeated identical searches.
+- Each itinerary is normalized into the existing HorusMaps flight result model. The fare amount, currency, carrier, first flight number, stops, local departure/arrival times, and provider observation timestamp are kept separate from the road route.
+- Booking links are fetched only when the user taps **روابط الحجز**. The Worker calls `POST /api/fares/booking-links` with the itinerary's `ignav_id` and caches the resulting links for five minutes. This avoids spending one additional request for every result before the user chooses one.
+- The Android app never receives the API key. It calls only the HorusMaps Worker.
+
+Set `IGNAV_API_KEY` as a Cloudflare Worker secret for the Preview environment used by this branch. Never put the key in GitHub, `wrangler.toml`, Android resources, or BuildConfig. Do not set it on Production until the user explicitly approves a production rollout.
+
+Ignav advertises 1,000 free successful requests as a one-time allowance, then USD $2 per 1,000 successful requests. The allowance does not reset monthly. Fare results may be reused for up to 30 minutes, and prices/availability can change; the app must tell users to confirm the final amount with the booking provider.
+
+If `IGNAV_API_KEY` is absent, the existing OAG + Travelpayouts integration remains as a legacy fallback. If an Ignav key is configured but the provider rejects the request, HorusMaps reports the provider error rather than silently switching providers and consuming additional quota.
+
 ## OAG schedule provider
 
 OAG's developer portal advertises a free tier with:
@@ -37,6 +53,7 @@ The real-time Aviasales Flight Search API has a 50,000 monthly active user eligi
 
 ## Data honesty and limitations
 
+- Ignav returns fare itineraries and booking handoffs, but HorusMaps does not guarantee that a displayed price or seat remains available at checkout.
 - OAG Flight Info provides schedules and status, not ticket prices or bookable inventory.
 - Travelpayouts fare observations are cached prices from prior user searches, not guaranteed live quotes.
 - A schedule or cached fare is not a guarantee that a seat is available or that a flight will operate exactly as planned. Users must verify the final price and availability with the booking provider before payment.
@@ -57,6 +74,8 @@ OpenStreetMap data is provided under the ODbL. Keep attribution visible in the p
 ## Not yet included
 
 - Guaranteed live ticket prices and bookable inventory.
+- Round-trip and multi-city booking flow in the Android interface; the first Ignav integration is one-way.
+- Multi-airport pair expansion when the nearest airport has no offers.
 - OAG connecting itineraries through the Connections API.
 - Multi-airport city-code expansion.
 - Airline-direct schedule adapters.
