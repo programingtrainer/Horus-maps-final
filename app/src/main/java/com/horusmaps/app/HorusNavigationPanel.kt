@@ -70,6 +70,8 @@ fun HorusNavigationPanel(
     flightItineraryMessage: String? = null,
     onConfirmTrainArrival: () -> Unit = {},
     onConfirmFlightArrival: () -> Unit = {},
+    onGetBookingLinks: (HorusPriceOffer) -> Unit = {},
+    bookingLoadingId: String? = null,
     modifier: Modifier = Modifier
 ) {
     val uriHandler = LocalUriHandler.current
@@ -221,12 +223,23 @@ fun HorusNavigationPanel(
                                         Text("آخر رصد: ${offer.foundAt}", color = Color(0xFF98A2B3), fontSize = 9.sp)
                                     }
                                 }
-                                if (offer.bookingUrl.isNotBlank()) {
-                                    Button(
+                                when {
+                                    offer.bookingUrl.isNotBlank() -> Button(
                                         onClick = { runCatching { uriHandler.openUri(offer.bookingUrl) } },
                                         shape = RoundedCornerShape(10.dp),
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16834A))
                                     ) { Text("عرض السعر", fontSize = 10.sp) }
+                                    offer.ignavId.isNotBlank() -> Button(
+                                        onClick = { onGetBookingLinks(offer) },
+                                        enabled = bookingLoadingId == null,
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16834A))
+                                    ) {
+                                        Text(
+                                            if (bookingLoadingId == offer.ignavId) "جارٍ التحميل..." else "روابط الحجز",
+                                            fontSize = 10.sp
+                                        )
+                                    }
                                 }
                             }
                         }
