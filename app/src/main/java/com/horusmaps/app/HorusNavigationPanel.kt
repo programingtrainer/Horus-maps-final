@@ -29,7 +29,8 @@ data class HorusNavigationDestination(
     val name: String,
     val address: String,
     val latitude: Double,
-    val longitude: Double
+    val longitude: Double,
+    val isLocalPlace: Boolean = false
 )
 
 @Composable
@@ -51,6 +52,7 @@ fun HorusNavigationPanel(
     transportOptions: List<String> = emptyList(),
     onSearchTransport: () -> Unit = {},
     onPickDate: () -> Unit = {},
+    allowIntercityModes: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -68,7 +70,7 @@ fun HorusNavigationPanel(
                 Text(destination.address, color = Color(0xFF667085), fontSize = 11.sp, maxLines = 2)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("driving" to "سيارة", "walking" to "مشي", "transit" to "قطار", "flight" to "طيران").forEach { (mode, label) ->
+                (if (allowIntercityModes) listOf("driving" to "سيارة", "walking" to "مشي", "transit" to "قطار", "flight" to "طيران") else listOf("driving" to "سيارة", "walking" to "مشي")).forEach { (mode, label) ->
                     val selected = selectedMode == mode
                     Text(
                         text = label,
