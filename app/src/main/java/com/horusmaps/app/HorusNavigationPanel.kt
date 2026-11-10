@@ -53,6 +53,11 @@ fun HorusNavigationPanel(
     onSearchTransport: () -> Unit = {},
     onPickDate: () -> Unit = {},
     allowIntercityModes: Boolean = true,
+    originStations: List<HorusTransitStation> = emptyList(),
+    destinationStations: List<HorusTransitStation> = emptyList(),
+    onRouteToOriginStation: (HorusTransitStation) -> Unit = {},
+    waitingForTrainArrival: Boolean = false,
+    onConfirmTrainArrival: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -88,7 +93,34 @@ fun HorusNavigationPanel(
                     )
                 }
             }
+            if (waitingForTrainArrival) {
+                Text("اتبع رحلة القطار إلى محطة الوصول المحددة، ثم أكّد وصولك للانتقال إلى الجزء الأخير من الرحلة.",
+                    color = Color(0xFF475467), fontSize = 11.sp)
+                Button(
+                    onClick = onConfirmTrainArrival,
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16834A))
+                ) { Text("وصلت إلى محطة الوصول — تابع إلى وجهتي") }
+            }
             if (selectedMode == "transit" || selectedMode == "flight") {
+                if (selectedMode == "transit" && originStations.isNotEmpty()) {
+                    Text("محطات الرحلة", color = Color(0xFF172B45), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    originStations.take(3).forEach { station ->
+                        val distance = if (station.distanceMeters >= 1000) String.format(java.util.Locale.US, "%.1f كم", station.distanceMeters / 1000.0) else "${station.distanceMeters} متر"
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("محطة الانطلاق: ${station.name}", color = Color(0xFF344054), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                Text("تبعد $distance عن موقعك", color = Color(0xFF667085), fontSize = 10.sp)
+                            }
+                            Button(onClick = { onRouteToOriginStation(station) }, shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087FE5))) { Text("اذهب", fontSize = 11.sp) }
+                        }
+                    }
+                    destinationStations.firstOrNull()?.let { station ->
+                        Text("محطة الوصول المقترحة: ${station.name}", color = Color(0xFF475467), fontSize = 10.sp)
+                    }
+                }
                 Text(
                     if (selectedMode == "transit") "موعد مغادرة القطار: $travelDate • $travelTime"
                     else "تاريخ المغادرة: $travelDate",
@@ -265,6 +297,7 @@ fun HorusNavigationActiveHud(
     maneuver: HorusRouteStep?,
     distanceToManeuverMeters: Int?,
     onStop: () -> Unit,
+    arrivedActionLabel: String = "إنهاء",
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -288,7 +321,7 @@ fun HorusNavigationActiveHud(
                     Text(formatNavigationDuration(remainingSeconds), color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
                 Text(
-                    "إنهاء",
+                    arrivedActionLabel,
                     modifier = Modifier
                         .background(Color(0xFF29465F), RoundedCornerShape(10.dp))
                         .clickable(onClick = onStop)
