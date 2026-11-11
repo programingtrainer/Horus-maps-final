@@ -88,7 +88,7 @@ fun HorusMapSearchPanel(
                     },
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp),
-                    placeholder = { Text("ابحث عن مستشفى أو مدينة أو شارع أو منطقة...", fontSize = 13.sp) },
+                    placeholder = { Text("ابحث عن قرية أو شارع أو مدرسة أو مكان...", fontSize = 13.sp) },
                     leadingIcon = {
                         Icon(Icons.Filled.Search, contentDescription = null, tint = Color(0xFF287FE8))
                     },
@@ -193,7 +193,7 @@ fun HorusMapSearchPanel(
                                 SearchResultRow(
                                     title = result.name,
                                     subtitle = result.displayName,
-                                    trailing = "موقع جغرافي",
+                                    trailing = geographyKindLabel(result.kind),
                                     onClick = { onSelectGeography(result) }
                                 )
                             }
@@ -256,4 +256,19 @@ private fun SearchResultRow(
 private fun formatDistance(meters: Int): String = when {
     meters < 1000 -> "$meters م"
     else -> String.format(java.util.Locale.getDefault(), "%.1f كم", meters / 1000.0)
+}
+
+private fun geographyKindLabel(kind: String): String {
+    return when (kind.lowercase(java.util.Locale.ROOT)) {
+        "village", "hamlet", "isolated_dwelling" -> "قرية"
+        "town", "city", "municipality" -> "مدينة"
+        "suburb", "neighbourhood", "neighborhood", "quarter" -> "حي"
+        "residential", "pedestrian", "living_street", "street", "road" -> "شارع"
+        "school", "college", "university", "kindergarten" -> "تعليم"
+        "hospital", "clinic", "pharmacy" -> "صحة"
+        "place_of_worship", "mosque" -> "مسجد"
+        "railway", "station", "train_station" -> "محطة قطار"
+        "administrative", "boundary" -> "منطقة إدارية"
+        else -> "موقع جغرافي"
+    }
 }

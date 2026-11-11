@@ -117,6 +117,69 @@ data class HorusNearbyPlace(
 
 data class HorusCountryInfo(val code: String, val name: String)
 
+data class HorusRouteStep(
+    val type: String,
+    val modifier: String,
+    val name: String,
+    val instruction: String,
+    val distanceFromStartMeters: Int,
+    val distanceMeters: Int,
+    val durationSeconds: Int,
+    val latitude: Double,
+    val longitude: Double
+)
+
+data class HorusTransitStation(
+    val name: String,
+    val latitude: Double,
+    val longitude: Double,
+    val distanceMeters: Int
+)
+
+data class HorusAirport(
+    val name: String,
+    val iataCode: String,
+    val latitude: Double,
+    val longitude: Double,
+    val distanceMeters: Int
+)
+
+data class HorusPriceOffer(
+    val price: Double,
+    val currency: String,
+    val airlineIata: String,
+    val flightNumber: String,
+    val departureAt: String,
+    val stops: Int,
+    val durationMinutes: Int,
+    val foundAt: String,
+    val bookingUrl: String,
+    val ignavId: String = ""
+)
+
+data class HorusTransportSearchResult(
+    val provider: String,
+    val available: Boolean,
+    val message: String?,
+    val options: List<String>,
+    val geometryGeoJson: String? = null,
+    val originStations: List<HorusTransitStation> = emptyList(),
+    val destinationStations: List<HorusTransitStation> = emptyList(),
+    val originAirport: HorusAirport? = null,
+    val destinationAirport: HorusAirport? = null,
+    val priceMessage: String? = null,
+    val priceOffers: List<HorusPriceOffer> = emptyList()
+)
+
+data class HorusRouteResult(
+    val mode: String,
+    val distanceMeters: Int,
+    val durationSeconds: Int,
+    val geometryGeoJson: String,
+    val provider: String,
+    val steps: List<HorusRouteStep>
+)
+
 object HorusMapSearchApi {
     private const val BASE_URL = "${BuildConfig.HORUS_API_BASE_URL}/v1/search"
     private const val USER_AGENT = "HorusMaps-Android/0.1"
@@ -275,6 +338,264 @@ object HorusMapSearchApi {
                 }
             }
         }
+
+
+    suspend fun searchTransit(
+        originLatitude: Double, originLongitude: Double,
+        destinationLatitude: Double, destinationLongitude: Double,
+        departureTime: String
+    ): HorusTransportSearchResult = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("originLatitude", originLatitude).put("originLongitude", originLongitude)
+            .put("destinationLatitude", destinationLatitude).put("destinationLongitude", destinationLongitude)
+            .put("departureTime", departureTime)
+        val root = JSONObject(post("$BASE_URL/transit", body))
+        if (!root.optBoolean("ok")) throw IllegalStateException(root.optString("error", "تعذر البحث عن القطارات."))
+        val options = root.optJSONArray("options") ?: JSONArray()
+        fun parseStations(key: String): List<HorusTransitStation> {
+            val stations = root.optJSONArray(key) ?: JSONArray()
+            return buildList {
+                for (stationIndex in 0 until stations.length()) {
+                    val station = stations.optJSONObject(stationIndex) ?: continue
+                    val latitude = station.optDouble("latitude", Double.NaN)
+                    val longitude = station.optDouble("longitude", Double.NaN)
+                    if (!latitude.isFinite() || !longitude.isFinite()) continue
+                    add(HorusTransitStation(
+                        name = station.optString("name", "محطة قطار"),
+                        latitude = latitude,
+                        longitude = longitude,
+                        distanceMeters = station.optInt("distanceMeters")
+                    ))
+                }
+            }
+        }
+        val originStations = parseStations("originStations")
+        val destinationStations = parseStations("destinationStations")
+        val lines = buildList {
+            fun appendStations(stations: List<HorusTransitStation>, label: String) {
+                stations.forEach { station ->
+                    val distanceLabel = if (station.distanceMeters >= 1000) {
+                        String.format(Locale.US, "%.1f كم", station.distanceMeters / 1000.0)
+                    } else "${station.distanceMeters} متر"
+                    add("$label: ${station.name} • $distanceLabel")
+                }
+            }
+            appendStations(originStations, "أقرب محطة للبداية")
+            appendStations(destinationStations, "أقرب محطة للوجهة")
+            if (options.length() > 0) add("مواعيد القطارات المتاحة:")
+            for (index in 0 until options.length()) {
+                val option = options.optJSONObject(index) ?: continue
+                val durationMinutes = (option.optInt("durationSeconds") / 60).coerceAtLeast(1)
+                val distanceMeters = option.optInt("distanceMeters")
+                val distanceLabel = if (distanceMeters > 0) " • ${String.format(Locale.US, "%.1f", distanceMeters / 1000.0)} كم" else ""
+                add("الخيار ${index + 1} • ${durationMinutes} دقيقة • ${option.optInt("transfers")} تبديل${distanceLabel}")
+                val legs = option.optJSONArray("legs") ?: JSONArray()
+                for (legIndex in 0 until legs.length()) {
+                    val leg = legs.optJSONObject(legIndex) ?: continue
+                    val departure = leg.optString("departure").ifBlank { leg.optString("scheduledDeparture") }
+                    val arrival = leg.optString("arrival").ifBlank { leg.optString("scheduledArrival") }
+                    val status = when {
+                        leg.optBoolean("cancelled") -> "ملغاة"
+                        leg.optBoolean("realTime") -> "تحديث مباشر"
+                        else -> "حسب الجدول"
+                    }
+                    add(listOf(
+                        leg.optString("mode"),
+                        leg.optString("agencyName"),
+                        leg.optString("routeName"),
+                        "${leg.optString("from")} → ${leg.optString("to")}",
+                        "$departure - $arrival",
+                        status
+                    ).filter { it.isNotBlank() }.joinToString(" • "))
+                }
+            }
+        }
+        val firstGeometry = options.optJSONObject(0)?.optJSONObject("geometry")?.toString()
+        HorusTransportSearchResult(
+            provider = root.optString("provider", "Transitous / MOTIS"),
+            available = root.optBoolean("available"),
+            message = root.optString("message").takeIf { it.isNotBlank() && it != "null" },
+            options = lines,
+            geometryGeoJson = firstGeometry,
+            originStations = originStations,
+            destinationStations = destinationStations
+        )
+    }
+
+    suspend fun searchFlights(
+        originLatitude: Double, originLongitude: Double,
+        destinationLatitude: Double, destinationLongitude: Double,
+        date: String
+    ): HorusTransportSearchResult = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("originLatitude", originLatitude).put("originLongitude", originLongitude)
+            .put("destinationLatitude", destinationLatitude).put("destinationLongitude", destinationLongitude)
+            .put("date", date)
+        val root = JSONObject(post("$BASE_URL/flights", body))
+        if (!root.optBoolean("ok")) throw IllegalStateException(root.optString("error", "تعذر البحث عن الطيران."))
+        val options = root.optJSONArray("options") ?: JSONArray()
+        fun parseAirport(value: JSONObject?): HorusAirport? {
+            if (value == null) return null
+            val latitude = value.optDouble("latitude", Double.NaN)
+            val longitude = value.optDouble("longitude", Double.NaN)
+            val code = value.optString("iataCode")
+            if (code.isBlank()) return null
+            return HorusAirport(
+                name = value.optString("name", code),
+                iataCode = code,
+                latitude = latitude,
+                longitude = longitude,
+                distanceMeters = value.optInt("distanceMeters")
+            )
+        }
+        val firstOption = options.optJSONObject(0)
+        val originAirport = parseAirport(root.optJSONObject("originAirport"))
+            ?: parseAirport(firstOption?.optJSONObject("origin"))
+        val destinationAirport = parseAirport(root.optJSONObject("destinationAirport"))
+            ?: parseAirport(firstOption?.optJSONObject("destination"))
+        val lines = buildList {
+            originAirport?.let { airport ->
+                val distance = if (airport.distanceMeters >= 1000) String.format(Locale.US, "%.1f كم", airport.distanceMeters / 1000.0) else "${airport.distanceMeters} متر"
+                add("مطار المغادرة: ${airport.name} (${airport.iataCode}) • يبعد $distance عن موقعك")
+            }
+            destinationAirport?.let { airport ->
+                val distance = if (airport.distanceMeters >= 1000) String.format(Locale.US, "%.1f كم", airport.distanceMeters / 1000.0) else "${airport.distanceMeters} متر"
+                add("مطار الوصول: ${airport.name} (${airport.iataCode}) • يبعد $distance عن الوجهة")
+            }
+            for (index in 0 until options.length()) {
+                val option = options.optJSONObject(index)
+                if (option == null) {
+                    val legacyLine = options.optString(index).takeIf { it.isNotBlank() && it != "null" }
+                    if (legacyLine != null) add(legacyLine)
+                    continue
+                }
+                val flightNumber = option.optString("flightNumber")
+                val airline = option.optString("airline")
+                val origin = option.optJSONObject("origin") ?: JSONObject()
+                val destination = option.optJSONObject("destination") ?: JSONObject()
+                val from = origin.optString("iataCode")
+                val to = destination.optString("iataCode")
+                val departure = option.optString("departure")
+                val timezone = option.optString("timezone")
+                val arrival = option.optString("arrival")
+                val timeZoneLabel = timezone.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+                add("الرحلة ${index + 1} • $flightNumber • $airline")
+                add("$from → $to • المغادرة: $departure$timeZoneLabel • الوصول: ${arrival.ifBlank { "غير متاح" }}")
+                add("عدد التوقفات: ${option.optInt("stops")} • المصدر: ${option.optString("source", "Navo24")}")
+                val durationSeconds = option.optLong("durationSeconds", 0L)
+                if (durationSeconds > 0L) {
+                    val totalMinutes = durationSeconds / 60
+                    val durationLabel = if (totalMinutes >= 60) "${totalMinutes / 60} ساعة و ${totalMinutes % 60} دقيقة" else "${totalMinutes} دقيقة"
+                    add("مدة الرحلة المجدولة: $durationLabel")
+                }
+                val via = option.optJSONArray("via") ?: JSONArray()
+                if (via.length() > 0) {
+                    add("محطات التوقف: " + (0 until via.length()).joinToString("، ") { via.optString(it) })
+                }
+                option.optString("status").takeIf { it.isNotBlank() }?.let { add("الحالة المنشورة: $it") }
+                option.optString("updatedAt").takeIf { it.isNotBlank() }?.let { add("آخر تحديث للبيانات: $it") }
+            }
+        }
+        val priceJson = root.optJSONArray("priceOffers") ?: JSONArray()
+        val priceOffers = buildList {
+            for (index in 0 until priceJson.length()) {
+                val offer = priceJson.optJSONObject(index) ?: continue
+                val price = offer.optDouble("price", Double.NaN)
+                if (!price.isFinite() || price <= 0.0) continue
+                add(
+                    HorusPriceOffer(
+                        price = price,
+                        currency = offer.optString("currency", "USD"),
+                        airlineIata = offer.optString("airlineIata"),
+                        flightNumber = offer.optString("flightNumber"),
+                        departureAt = offer.optString("departureAt"),
+                        stops = offer.optInt("stops"),
+                        durationMinutes = offer.optInt("durationMinutes"),
+                        foundAt = offer.optString("foundAt"),
+                        bookingUrl = offer.optString("bookingUrl"),
+                        ignavId = offer.optString("ignavId")
+                    )
+                )
+            }
+        }
+        HorusTransportSearchResult(
+            provider = root.optString("provider", "Open flight schedules"),
+            available = root.optBoolean("available"),
+            message = root.optString("message").takeIf { it.isNotBlank() && it != "null" },
+            options = lines,
+            originAirport = originAirport,
+            destinationAirport = destinationAirport,
+            priceMessage = root.optString("priceMessage").takeIf { it.isNotBlank() && it != "null" },
+            priceOffers = priceOffers
+        )
+    }
+
+    suspend fun bookingLink(ignavId: String): String? = withContext(Dispatchers.IO) {
+        require(ignavId.isNotBlank()) { "معرّف عرض الطيران غير متاح." }
+        val body = JSONObject().put("ignavId", ignavId)
+        val root = JSONObject(post("$BASE_URL/flights/booking-links", body))
+        if (!root.optBoolean("ok")) {
+            throw IllegalStateException(root.optString("error", "تعذر جلب روابط الحجز."))
+        }
+        val links = root.optJSONArray("links") ?: JSONArray()
+        for (index in 0 until links.length()) {
+            val url = links.optJSONObject(index)?.optString("url").orEmpty()
+            if (url.startsWith("https://", ignoreCase = true)) return@withContext url
+        }
+        null
+    }
+
+    suspend fun route(
+        originLatitude: Double,
+        originLongitude: Double,
+        destinationLatitude: Double,
+        destinationLongitude: Double,
+        mode: String
+    ): HorusRouteResult = withContext(Dispatchers.IO) {
+        require(mode == "driving" || mode == "walking") {
+            "وسيلة الانتقال المطلوبة غير متاحة حاليًا."
+        }
+        val body = JSONObject()
+            .put("originLatitude", originLatitude)
+            .put("originLongitude", originLongitude)
+            .put("destinationLatitude", destinationLatitude)
+            .put("destinationLongitude", destinationLongitude)
+            .put("mode", mode)
+        val root = JSONObject(post("$BASE_URL/route", body))
+        if (!root.optBoolean("ok")) {
+            throw IllegalStateException(root.optString("error", "تعذر حساب الطريق."))
+        }
+        val geometry = root.optJSONObject("geometry")
+            ?: throw IllegalStateException("لم تصل بيانات مسار صالحة.")
+        val stepArray = root.optJSONArray("steps") ?: JSONArray()
+        val routeSteps = buildList {
+            for (index in 0 until stepArray.length()) {
+                val item = stepArray.optJSONObject(index) ?: continue
+                val latitude = item.optDouble("latitude", Double.NaN)
+                val longitude = item.optDouble("longitude", Double.NaN)
+                if (!latitude.isFinite() || !longitude.isFinite()) continue
+                add(HorusRouteStep(
+                    type = item.optString("type", "continue"),
+                    modifier = item.optString("modifier"),
+                    name = item.optString("name"),
+                    instruction = item.optString("instruction"),
+                    distanceFromStartMeters = item.optInt("distanceFromStartMeters", 0),
+                    distanceMeters = item.optInt("distanceMeters", 0),
+                    durationSeconds = item.optInt("durationSeconds", 0),
+                    latitude = latitude,
+                    longitude = longitude
+                ))
+            }
+        }
+        HorusRouteResult(
+            mode = root.optString("mode", mode),
+            distanceMeters = root.optInt("distanceMeters", 0),
+            durationSeconds = root.optInt("durationSeconds", 0),
+            geometryGeoJson = geometry.toString(),
+            provider = root.optString("provider"),
+            steps = routeSteps
+        )
+    }
 
     suspend fun reverseCountry(latitude: Double, longitude: Double): HorusCountryInfo =
         withContext(Dispatchers.IO) {

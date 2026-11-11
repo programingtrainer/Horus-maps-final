@@ -26,7 +26,7 @@ android {
             buildConfigField(
                 "String",
                 "HORUS_API_BASE_URL",
-                "\"https://ui-horusmaps-map-attribution-horus-maps-final.horus-egypt-company.workers.dev\""
+                "\"https://feature-advanced-search-navigation-horus-maps-final.horus-egypt-company.workers.dev\""
             )
         }
         release {

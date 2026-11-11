@@ -117,10 +117,341 @@ async function getAuthenticatedUser(request, env) {
 
 
 const SEARCH_USER_AGENT = "HorusMaps/0.1 (Android map search; https://github.com/programingtrainer/Horus-maps-final)";
+
+function parseCsvRecord(line) {
+  const fields = [];
+  let value = "", quoted = false;
+  for (let index = 0; index < line.length; index++) {
+    const character = line[index];
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') { value += '"'; index++; }
+      else quoted = !quoted;
+    } else if (character === "," && !quoted) {
+      fields.push(value); value = "";
+    } else value += character;
+  }
+  fields.push(value);
+  return fields;
+}
+
+async function findAirportsFromOurAirports(latitude, longitude, env) {
+  const cacheKey = "horus:airport-catalog:ourairports:v1";
+  let csv = "";
+  if (env.HORUS_MAPS_CONFIG) {
+    try { csv = await env.HORUS_MAPS_CONFIG.get(cacheKey) || ""; }
+    catch (error) { console.warn("[HorusFlights] Airport catalog cache read failed", String(error?.message || error).slice(0, 100)); }
+  }
+  if (!csv) {
+    const response = await fetch("https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airports.csv", {
+      headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "text/csv" },
+      signal: AbortSignal.timeout(18000)
+    });
+    if (!response.ok) throw new Error("OurAirports catalog HTTP " + response.status);
+    csv = await response.text();
+    if (!csv || csv.length < 1000) throw new Error("OurAirports catalog was empty or truncated");
+    if (env.HORUS_MAPS_CONFIG) {
+      try { await env.HORUS_MAPS_CONFIG.put(cacheKey, csv, { expirationTtl: 21600 }); }
+      catch (error) { console.warn("[HorusFlights] Airport catalog cache write failed", String(error?.message || error).slice(0, 100)); }
+    }
+  }
+
+  const lines = csv.split(/\r?\n/);
+  const headers = parseCsvRecord(lines.shift() || "");
+  const column = name => headers.indexOf(name);
+  const typeIndex = column("type"), iataIndex = column("iata_code");
+  const nameIndex = column("name"), latIndex = column("latitude_deg");
+  const lonIndex = column("longitude_deg"), scheduledIndex = column("scheduled_service");
+  if ([typeIndex, iataIndex, nameIndex, latIndex, lonIndex].some(index => index < 0)) {
+    throw new Error("OurAirports catalog schema is invalid");
+  }
+
+  const airports = [];
+  for (const line of lines) {
+    if (!line) continue;
+    const row = parseCsvRecord(line);
+    const iataCode = String(row[iataIndex] || "").trim().toUpperCase();
+    const type = String(row[typeIndex] || "");
+    if (!/^[A-Z]{3}$/.test(iataCode) ||
+        !["large_airport", "medium_airport", "small_airport"].includes(type) ||
+        (scheduledIndex >= 0 && String(row[scheduledIndex]).toLowerCase() !== "yes")) continue;
+    const airportLatitude = Number(row[latIndex]);
+    const airportLongitude = Number(row[lonIndex]);
+    if (!Number.isFinite(airportLatitude) || !Number.isFinite(airportLongitude)) continue;
+    airports.push({
+      iataCode,
+      name: String(row[nameIndex] || iataCode),
+      latitude: airportLatitude,
+      longitude: airportLongitude,
+      distanceMeters: Math.round(haversineMeters(latitude, longitude, airportLatitude, airportLongitude))
+    });
+  }
+  return airports.sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
+}
+
+async function findNearbyOpenAirportsUncached(latitude, longitude, env) {
+  const query = '[out:json][timeout:15];(nwr(around:500000,' + latitude + ',' + longitude + ')["aeroway"~"^(aerodrome|airport)$"]["iata"];);out center tags 150;';
+  const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": SEARCH_USER_AGENT,
+        "Accept": "application/json"
+      },
+      body: "data=" + encodeURIComponent(query),
+      signal: AbortSignal.timeout(18000)
+    });
+    if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
+    const payload = await response.json();
+    if (!Array.isArray(payload.elements)) throw new Error("Invalid airport data from " + new URL(endpoint).hostname);
+    return payload.elements;
+  });
+  let elements;
+  try {
+    elements = await Promise.any(attempts);
+  } catch (error) {
+    const failures = Array.isArray(error?.errors) ? error.errors : [];
+    console.warn("[HorusFlights] Overpass airport lookup failed", failures.map(item => String(item?.message || item).slice(0, 90)).join("; ").slice(0, 350));
+    try {
+      const fallback = await findAirportsFromOurAirports(latitude, longitude, env);
+      if (fallback.length) return fallback;
+      throw new Error("OurAirports found no scheduled airport within 500 km");
+    } catch (fallbackError) {
+      console.error("[HorusFlights] Airport fallback failed", String(fallbackError?.message || fallbackError).slice(0, 150));
+      throw new Error("تعذر الوصول إلى مصادر بيانات المطارات المفتوحة حاليًا.");
+    }
+  }
+  const seen = new Set();
+  return elements.map(item => {
+    const tags = item.tags || {};
+    const iataCode = String(tags.iata || tags["iata:code"] || "").trim().toUpperCase();
+    const latitudeValue = Number(item.lat ?? item.center?.lat);
+    const longitudeValue = Number(item.lon ?? item.center?.lon);
+    if (!/^[A-Z]{3}$/.test(iataCode) || !Number.isFinite(latitudeValue) ||
+        !Number.isFinite(longitudeValue) || tags.access === "private" ||
+        tags.military === "yes" || seen.has(iataCode)) return null;
+    seen.add(iataCode);
+    return {
+      iataCode,
+      name: String(tags.name || tags["name:en"] || tags["name:ar"] || iataCode),
+      latitude: latitudeValue,
+      longitude: longitudeValue,
+      distanceMeters: Math.round(haversineMeters(latitude, longitude, latitudeValue, longitudeValue))
+    };
+  }).filter(Boolean).sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
+}
+
+async function findNearbyOpenAirports(latitude, longitude, env) {
+  const key = "horus:airport-nearby:v2:" + latitude.toFixed(2) + ":" + longitude.toFixed(2);
+  if (env.HORUS_MAPS_CONFIG) {
+    try {
+      const cached = await env.HORUS_MAPS_CONFIG.get(key);
+      if (cached) return JSON.parse(cached);
+    } catch (error) {
+      console.warn("[HorusFlights] Nearby airport cache read failed", String(error?.message || error).slice(0, 100));
+    }
+  }
+  const airports = await findNearbyOpenAirportsUncached(latitude, longitude, env);
+  if (env.HORUS_MAPS_CONFIG && airports.length) {
+    try { await env.HORUS_MAPS_CONFIG.put(key, JSON.stringify(airports), { expirationTtl: 43200 }); }
+    catch (error) { console.warn("[HorusFlights] Nearby airport cache write failed", String(error?.message || error).slice(0, 100)); }
+  }
+  return airports;
+}
+
+function normalizeOagFlight(flight, originAirport, destinationAirport) {
+  const elapsedMinutes = Number(flight.ElapsedTime ?? flight.DurationMinutes ?? flight.durationMinutes);
+  const durationSeconds = Number.isFinite(elapsedMinutes) && elapsedMinutes > 0
+    ? Math.round(elapsedMinutes * 60)
+    : 0;
+  return {
+    flightNumber: String(flight.FlightNumber || flight.flightNumber || flight.FlightNo || ""),
+    airline: String(flight.AirlineName || flight.CarrierName || flight.airline?.name || flight.AirlineIata || ""),
+    airlineIata: String(flight.AirlineIata || flight.CarrierIata || flight.airline?.iata || ""),
+    origin: {
+      iataCode: String(flight.DepartureAirport || flight.origin?.iata || originAirport.iataCode),
+      name: String(flight.DepartureAirportName || flight.origin?.name || originAirport.name),
+      latitude: originAirport.latitude,
+      longitude: originAirport.longitude
+    },
+    destination: {
+      iataCode: String(flight.ArrivalAirport || flight.destination?.iata || destinationAirport.iataCode),
+      name: String(flight.ArrivalAirportName || flight.destination?.name || destinationAirport.name),
+      latitude: destinationAirport.latitude,
+      longitude: destinationAirport.longitude
+    },
+    departure: String(flight.DepartureDateTime || flight.ScheduledDeparture || flight.departure || ""),
+    departureUtc: String(flight.DepartureDateTimeUtc || flight.DepartureDateTimeUTC || ""),
+    arrival: String(flight.ArrivalDateTime || flight.ScheduledArrival || flight.arrival || ""),
+    durationSeconds,
+    timezone: String(flight.DepartureTimeZone || flight.TimeZone || ""),
+    stops: Math.max(0, Number(flight.Stops || flight.StopCount) || 0),
+    via: Array.isArray(flight.IntermediateAirports) ? flight.IntermediateAirports.map(item =>
+      String(item.Iata || item.IATA || item.Code || item.Name || "")
+    ).filter(Boolean) : [],
+    status: String(flight.FlightStatus || flight.Status || flight.status || "جدول مجدول"),
+    updatedAt: String(flight.LastUpdated || flight.UpdatedAt || ""),
+    source: "OAG Flight Info",
+    cargo: false
+  };
+}
+
+function normalizeIgnavFlight(itinerary, originAirport, destinationAirport, observedAt = "") {
+  const outbound = itinerary?.outbound || {};
+  const segments = Array.isArray(outbound.segments) ? outbound.segments : [];
+  if (!segments.length) return null;
+  const first = segments[0] || {};
+  const last = segments[segments.length - 1] || {};
+  const durationMinutes = Number(outbound.duration_minutes) ||
+    segments.reduce((total, segment) => total + (Number(segment.duration_minutes) || 0), 0);
+  const flightNumber = [
+    String(first.marketing_carrier_code || ""),
+    String(first.flight_number || "")
+  ].join("").trim();
+  return {
+    flightNumber,
+    airline: String(outbound.carrier || first.operating_carrier_name || first.marketing_carrier_code || "شركة طيران"),
+    airlineIata: String(first.marketing_carrier_code || ""),
+    origin: {
+      iataCode: String(first.departure_airport || originAirport.iataCode),
+      name: originAirport.name,
+      latitude: originAirport.latitude,
+      longitude: originAirport.longitude
+    },
+    destination: {
+      iataCode: String(last.arrival_airport || destinationAirport.iataCode),
+      name: destinationAirport.name,
+      latitude: destinationAirport.latitude,
+      longitude: destinationAirport.longitude
+    },
+    departure: String(first.departure_time_local || first.departure_time_utc || ""),
+    departureUtc: String(first.departure_time_utc || ""),
+    arrival: String(last.arrival_time_local || last.arrival_time_utc || ""),
+    durationSeconds: Math.max(0, Math.round(durationMinutes * 60)),
+    timezone: String(first.departure_timezone || ""),
+    stops: Math.max(0, segments.length - 1),
+    via: segments.slice(0, -1).map(segment => String(segment.arrival_airport || "")).filter(Boolean),
+    status: String(itinerary?.price?.status || "سعر مسترجع من Ignav"),
+    updatedAt: String(itinerary?.observed_at || observedAt || ""),
+    source: "Ignav",
+    cargo: false,
+    ignavId: String(itinerary?.ignav_id || "")
+  };
+}
+
+function normalizeIgnavPriceOffer(itinerary, observedAt = "") {
+  const outbound = itinerary?.outbound || {};
+  const segments = Array.isArray(outbound.segments) ? outbound.segments : [];
+  const first = segments[0] || {};
+  const price = Number(itinerary?.price?.amount);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  return {
+    price,
+    currency: String(itinerary.price?.currency || "SAR").toUpperCase(),
+    airlineIata: String(first.marketing_carrier_code || ""),
+    flightNumber: [
+      String(first.marketing_carrier_code || ""),
+      String(first.flight_number || "")
+    ].join("").trim(),
+    departureAt: String(first.departure_time_local || first.departure_time_utc || ""),
+    stops: Math.max(0, segments.length - 1),
+    durationMinutes: Math.max(0, Number(outbound.duration_minutes) || 0),
+    foundAt: String(itinerary?.observed_at || observedAt || ""),
+    bookingUrl: "",
+    ignavId: String(itinerary?.ignav_id || "")
+  };
+}
+
+
+async function fetchTravelpayoutsPriceOffers(env, originIata, destinationIata, date) {
+  const token = String(env.TRAVELPAYOUTS_API_TOKEN || "").trim();
+  if (!token) {
+    return {
+      offers: [],
+      message: "أسعار التذاكر تحتاج مفتاح Travelpayouts Data API. التسجيل مجاني، لكن يجب تفعيل الوصول إلى Aviasales Data API أولًا."
+    };
+  }
+  try {
+    const cacheKey = [
+      "travelpayouts-flight-prices-v1",
+      originIata, destinationIata, date, "USD"
+    ].join(":");
+    const response = await cachedJson(env, cacheKey, 86400, async () => {
+      const target = new URL("https://api.travelpayouts.com/aviasales/v3/prices_for_dates");
+      target.searchParams.set("origin", originIata);
+      target.searchParams.set("destination", destinationIata);
+      target.searchParams.set("departure_at", date);
+      target.searchParams.set("one_way", "true");
+      target.searchParams.set("direct", "false");
+      target.searchParams.set("currency", "USD");
+      target.searchParams.set("limit", "30");
+      target.searchParams.set("page", "1");
+      const result = await fetch(target.toString(), {
+        headers: {
+          "X-Access-Token": token,
+          "Accept": "application/json",
+          "User-Agent": SEARCH_USER_AGENT
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+      const payload = await result.json().catch(() => ({}));
+      return json(payload, result.status);
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.success !== true || !Array.isArray(payload.data)) {
+      return {
+        offers: [],
+        message: response.status === 401
+          ? "مفتاح Travelpayouts غير صالح أو لا يملك صلاحية Aviasales Data API."
+          : "لم نتمكن من جلب الأسعار الاسترشادية من Travelpayouts حاليًا."
+      };
+    }
+    const offers = payload.data
+      .filter(item => item && Number.isFinite(Number(item.price)) && Number(item.price) > 0 && item.actual !== false)
+      .slice(0, 10)
+      .map(item => {
+        let bookingUrl = "";
+        if (typeof item.link === "string" && item.link.trim()) {
+          try {
+            bookingUrl = new URL(item.link, "https://www.aviasales.com").toString();
+          } catch (_) {}
+        }
+        return {
+          price: Number(item.price),
+          currency: String(item.currency || "USD").toUpperCase(),
+          airlineIata: String(item.airline || ""),
+          flightNumber: String(item.flight_number || ""),
+          departureAt: String(item.departure_at || ""),
+          returnAt: String(item.return_at || ""),
+          stops: Math.max(0, Number(item.transfers) || 0),
+          durationMinutes: Math.max(0, Number(item.duration_to || item.duration) || 0),
+          foundAt: String(item.found_at || ""),
+          expiresAt: String(item.expires_at || ""),
+          bookingUrl
+        };
+      });
+    return {
+      offers,
+      message: offers.length
+        ? "أسعار استرشادية مخزنة من عمليات بحث حديثة على Aviasales؛ قد تتغير ولا تؤكد توفر المقعد. تحقق من السعر النهائي قبل الدفع."
+        : "لا توجد أسعار حديثة مخزنة لهذا المسار والتاريخ. هذا لا يعني عدم وجود رحلات أو تذاكر."
+    };
+  } catch (error) {
+    console.warn("[HorusFlights] Travelpayouts price lookup failed", String(error?.message || error).slice(0, 140));
+    return {
+      offers: [],
+      message: "تعذر جلب الأسعار الاسترشادية الآن؛ جداول الرحلات تُعرض بشكل مستقل."
+    };
+  }
+}
+
+
 const SEARCH_OVERPASS_ENDPOINTS = [
   "https://overpass.private.coffee/api/interpreter",
-  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-  "https://overpass-api.de/api/interpreter"
+  "https://overpass-api.de/api/interpreter",
+  "https://z.overpass-api.de/api/interpreter",
+  "https://lz4.overpass-api.de/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 ];
 
 function validCoordinate(value, min, max) {
@@ -148,14 +479,20 @@ for (const [canonical, aliases] of [
 ]) for (const alias of aliases) GEOGRAPHIC_ALIASES.set(normalizeSearchText(alias), canonical);
 
 function geographicQueryVariants(query) {
-  const normalized = normalizeSearchText(query);
+  const raw = String(query || "").trim();
+  const normalized = normalizeSearchText(raw);
   let canonical = GEOGRAPHIC_ALIASES.get(normalized);
   if (!canonical && normalized.length >= 5) {
     for (const [alias, country] of GEOGRAPHIC_ALIASES) {
       if (alias.length >= 5 && levenshteinDistance(normalized, alias) <= 1) { canonical = country; break; }
     }
   }
-  return [...new Set((canonical ? [canonical, query] : [query]).map(value => String(value || "").trim()).filter(Boolean))];
+  // Keep the original phrase first, then try the place name without a generic
+  // Arabic/English feature prefix. This helps village, lane, school and street
+  // searches where the provider indexes the proper name separately.
+  const stripped = raw.replace(/^(?:(?:قرية|القرية|نجع|عزبة|شارع|طريق|حي|حارة|مدرسة|جامعة|village|street|road|school|university)\s+)/iu, "").trim();
+  const candidates = canonical ? [canonical, raw, stripped] : [raw, stripped];
+  return [...new Set(candidates.map(value => String(value || "").trim()).filter(value => value.length >= 2))].slice(0, 4);
 }
 
 function levenshteinDistance(left, right) {
@@ -195,6 +532,105 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2 +
     Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(dLon / 2) ** 2;
   return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function fetchValhallaRoute(originLat, originLon, destinationLat, destinationLon, costing) {
+  const response = await fetch("https://valhalla1.openstreetmap.de/route", {
+    method: "POST",
+    headers: {
+      "User-Agent": SEARCH_USER_AGENT,
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    body: JSON.stringify({
+      locations: [
+        { lat: originLat, lon: originLon, type: "break" },
+        { lat: destinationLat, lon: destinationLon, type: "break" }
+      ],
+      costing,
+      units: "kilometers",
+      directions_options: { units: "kilometers" }
+    }),
+    signal: AbortSignal.timeout(18000)
+  });
+  if (!response.ok) throw new Error("Valhalla " + costing + " router HTTP " + response.status);
+  const payload = await response.json();
+  const leg = payload.trip?.legs?.[0];
+  if (!leg?.shape) throw new Error("Valhalla returned no " + costing + " route");
+
+  const decodePolyline6 = encoded => {
+    let index = 0, latitude = 0, longitude = 0;
+    const coordinates = [];
+    const readValue = () => {
+      let result = 0, shift = 0, byte;
+      do {
+        if (index >= encoded.length) throw new Error("Invalid route geometry");
+        byte = encoded.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      return (result & 1) ? ~(result >> 1) : (result >> 1);
+    };
+    while (index < encoded.length) {
+      latitude += readValue();
+      longitude += readValue();
+      coordinates.push([longitude / 1e6, latitude / 1e6]);
+    }
+    return coordinates;
+  };
+
+  const geometry = { type: "LineString", coordinates: decodePolyline6(leg.shape) };
+  const cumulativeDistances = [0];
+  for (let index = 1; index < geometry.coordinates.length; index++) {
+    const left = geometry.coordinates[index - 1];
+    const right = geometry.coordinates[index];
+    cumulativeDistances.push(
+      cumulativeDistances[index - 1] +
+      haversineMeters(left[1], left[0], right[1], right[0])
+    );
+  }
+
+  const valhallaTypes = {
+    1: ["depart", ""], 2: ["depart", "right"], 3: ["depart", "left"],
+    4: ["arrive", ""], 5: ["arrive", "right"], 6: ["arrive", "left"],
+    7: ["continue", ""], 8: ["continue", ""], 9: ["turn", "slight_right"],
+    10: ["turn", "right"], 11: ["turn", "sharp_right"], 12: ["turn", "uturn"],
+    13: ["turn", "uturn"], 14: ["turn", "sharp_left"], 15: ["turn", "left"],
+    16: ["turn", "slight_left"], 17: ["ramp", "straight"], 18: ["ramp", "right"],
+    19: ["ramp", "left"], 20: ["exit", "right"], 21: ["exit", "left"],
+    22: ["continue", "straight"], 23: ["continue", "right"], 24: ["continue", "left"],
+    25: ["merge", ""], 26: ["roundabout", "enter"], 27: ["roundabout", "exit"],
+    28: ["ferry", "enter"], 29: ["ferry", "exit"]
+  };
+  const steps = (leg.maneuvers || []).map(maneuver => {
+    const shapeIndex = Math.max(0, Math.min(Number(maneuver.begin_shape_index) || 0, geometry.coordinates.length - 1));
+    const [type, modifier] = valhallaTypes[Number(maneuver.type)] || ["continue", ""];
+    const coordinate = geometry.coordinates[shapeIndex] || [NaN, NaN];
+    return {
+      type,
+      modifier,
+      name: Array.isArray(maneuver.street_names) ? maneuver.street_names.join(" / ") : "",
+      instruction: String(maneuver.instruction || ""),
+      distanceFromStartMeters: Math.round(cumulativeDistances[shapeIndex] || 0),
+      distanceMeters: Math.round((Number(maneuver.length) || 0) * 1000),
+      durationSeconds: Math.round(Number(maneuver.time) || 0),
+      longitude: Number(coordinate[0]),
+      latitude: Number(coordinate[1])
+    };
+  }).filter(step => Number.isFinite(step.latitude) && Number.isFinite(step.longitude));
+
+  const distanceMeters = Number(leg.summary?.length) * 1000;
+  const durationSeconds = Number(leg.summary?.time);
+  if (!Number.isFinite(distanceMeters) || !Number.isFinite(durationSeconds) || geometry.coordinates.length < 2) {
+    throw new Error("Valhalla returned incomplete " + costing + " route data");
+  }
+  return {
+    distanceMeters,
+    durationSeconds,
+    geometry,
+    steps,
+    provider: "Valhalla"
+  };
 }
 
 async function cachedJson(env, cacheKey, ttlSeconds, producer) {
@@ -464,6 +900,25 @@ async function resolvePlaceScope(query, nearLat, nearLon) {
   }
 }
 
+async function findNearestRailStation(latitude, longitude, radiusMeters = 50000, env) {
+  const key = "horus:rail-nearby:v2:" + latitude.toFixed(2) + ":" + longitude.toFixed(2) + ":" + radiusMeters;
+  if (env?.HORUS_MAPS_CONFIG) {
+    try {
+      const cached = await env.HORUS_MAPS_CONFIG.get(key);
+      if (cached) return JSON.parse(cached);
+    } catch (error) {
+      console.warn("[HorusTransit] Rail cache read failed", String(error?.message || error).slice(0, 100));
+    }
+  }
+  const stations = await findNearestRailStationUncached(latitude, longitude, radiusMeters);
+  if (env?.HORUS_MAPS_CONFIG && stations.length) {
+    try { await env.HORUS_MAPS_CONFIG.put(key, JSON.stringify(stations), { expirationTtl: 21600 }); }
+    catch (error) { console.warn("[HorusTransit] Rail cache write failed", String(error?.message || error).slice(0, 100)); }
+  }
+  return stations;
+}
+
+
 async function queryOverpassPlaceScope(scope, category) {
   const isRelationArea = scope.osmType === "relation" && /^\d+$/.test(scope.osmId) && scope.category === "boundary";
   let selectors;
@@ -541,6 +996,25 @@ async function queryPhotonGlobal(category, query, centerLat, centerLon) {
     if (!Array.isArray(payload.features)) throw new Error("Photon global search returned invalid data");
     return payload.features;
   }));
+
+  // Brand searches can be missing from a strict OSM category even when the
+  // place is indexed by Photon. Add one unfiltered text lookup as a fallback.
+  if (searchText) {
+    attempts.push((async () => {
+      const target = new URL("https://photon.komoot.io/api/");
+      target.searchParams.set("q", searchText);
+      target.searchParams.set("limit", "50");
+      target.searchParams.set("lang", "en");
+      const response = await fetch(target.toString(), {
+        headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+        signal: AbortSignal.timeout(8000)
+      });
+      if (!response.ok) throw new Error("Photon global text fallback HTTP " + response.status);
+      const payload = await response.json();
+      if (!Array.isArray(payload.features)) throw new Error("Photon global text fallback returned invalid data");
+      return payload.features;
+    })());
+  }
 
   const settled = await Promise.allSettled(attempts);
   const seen = new Set();
@@ -786,6 +1260,120 @@ async function queryOverpassCountry(countryCode, category, query) {
   }
 }
 
+async function findNearestRailStationFromTransitous(latitude, longitude, radiusMeters) {
+  const latitudeDelta = radiusMeters / 111320;
+  const longitudeDelta = radiusMeters / (111320 * Math.max(0.2, Math.cos(latitude * Math.PI / 180)));
+  const target = new URL("https://api.transitous.org/api/v6/map/stops");
+  target.searchParams.set("min", (latitude - latitudeDelta) + "," + (longitude - longitudeDelta));
+  target.searchParams.set("max", (latitude + latitudeDelta) + "," + (longitude + longitudeDelta));
+  target.searchParams.set("modes", "RAIL");
+  target.searchParams.set("language", "ar,en");
+  const response = await fetch(target.toString(), {
+    headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+    signal: AbortSignal.timeout(8500)
+  });
+  if (!response.ok) throw new Error("Transitous map/stops HTTP " + response.status);
+  const payload = await response.json();
+  if (!Array.isArray(payload)) throw new Error("Transitous map/stops returned an invalid payload");
+  return payload.map(stop => {
+    const stopLatitude = Number(stop.lat);
+    const stopLongitude = Number(stop.lon);
+    if (!Number.isFinite(stopLatitude) || !Number.isFinite(stopLongitude)) return null;
+    return {
+      name: String(stop.name || stop.stopId || "محطة قطار"),
+      railway: "station",
+      latitude: stopLatitude,
+      longitude: stopLongitude,
+      distanceMeters: Math.round(haversineMeters(latitude, longitude, stopLatitude, stopLongitude)),
+      stopId: String(stop.stopId || "")
+    };
+  }).filter(stop => stop && stop.distanceMeters <= radiusMeters)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
+}
+
+async function findRailStationsFromPhoton(latitude, longitude, radiusMeters) {
+  const target = new URL("https://photon.komoot.io/reverse");
+  target.searchParams.set("lat", String(latitude));
+  target.searchParams.set("lon", String(longitude));
+  target.searchParams.set("radius", String(Math.max(1, Math.ceil(radiusMeters / 1000))));
+  target.searchParams.append("osm_tag", "railway:station");
+  target.searchParams.append("osm_tag", "railway:halt");
+  const response = await fetch(target.toString(), {
+    headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+    signal: AbortSignal.timeout(8500)
+  });
+  if (!response.ok) throw new Error("Photon reverse rail lookup HTTP " + response.status);
+  const payload = await response.json();
+  const features = Array.isArray(payload.features) ? payload.features :
+    (payload.type === "Feature" ? [payload] : []);
+  const stations = features.map(feature => {
+    const coordinates = feature.geometry?.coordinates || [];
+    const lon = Number(coordinates[0]), lat = Number(coordinates[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const properties = feature.properties || {};
+    const distanceMeters = Math.round(haversineMeters(latitude, longitude, lat, lon));
+    if (distanceMeters > radiusMeters) return null;
+    return {
+      name: String(properties.name || properties.street || "محطة قطار"),
+      railway: String(properties.osm_value || "station"),
+      latitude: lat,
+      longitude: lon,
+      distanceMeters,
+      stopId: properties.osm_id ? String(properties.osm_id) : ""
+    };
+  }).filter(Boolean).sort((a,b)=>a.distanceMeters-b.distanceMeters).slice(0,3);
+  if (!stations.length) throw new Error("Photon reverse returned no rail station in range");
+  return stations;
+}
+
+async function findNearestRailStationUncached(latitude, longitude, radiusMeters = 50000) {
+  const attempts = [
+    findNearestRailStationFromTransitous(latitude, longitude, radiusMeters),
+    findRailStationsFromPhoton(latitude, longitude, radiusMeters)
+  ];
+  const query = '[out:json][timeout:8];(' +
+    'node(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')[\"railway\"~\"^(station|halt)$\"];' +
+    'way(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')[\"railway\"~\"^(station|halt)$\"];' +
+    ');out center tags 80;';
+  for (const endpoint of SEARCH_OVERPASS_ENDPOINTS) {
+    attempts.push((async () => {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+        body: "data=" + encodeURIComponent(query),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
+      const payload = await response.json();
+      if (!Array.isArray(payload.elements)) throw new Error("Invalid Overpass station response from " + new URL(endpoint).hostname);
+      const stations = payload.elements.map(item => {
+        const lat = Number(item.lat ?? item.center?.lat), lon = Number(item.lon ?? item.center?.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+        const tags = item.tags || {};
+        return {
+          name: String(tags.name || tags["name:en"] || tags["name:ar"] || "محطة قطار"),
+          railway: String(tags.railway || "station"),
+          latitude: lat,
+          longitude: lon,
+          distanceMeters: Math.round(haversineMeters(latitude, longitude, lat, lon))
+        };
+      }).filter(Boolean).sort((a,b)=>a.distanceMeters-b.distanceMeters).slice(0,3);
+      if (!stations.length) throw new Error("No mapped rail stations from " + new URL(endpoint).hostname);
+      return stations;
+    })());
+  }
+  try {
+    const stations = await Promise.any(attempts);
+    console.info("[HorusTransit] Rail stations found from a responsive open source");
+    return stations;
+  } catch (error) {
+    const failures = Array.isArray(error?.errors) ? error.errors : [];
+    const details = failures.map(item => String(item?.message || item).slice(0, 100)).join("; ");
+    console.warn("[HorusTransit] All open rail sources failed", details.slice(0, 400));
+    throw new Error(details || "All open station sources unavailable");
+  }
+}
+
 async function queryOverpass(lat, lon, countryCode, category, query, radius) {
   // The radius already constrains the search around the device position. Avoid
   // a country-area lookup here: it adds an expensive global area dependency
@@ -937,6 +1525,73 @@ export default {
       return json({ ok: true, service: "horus-maps-final", apiVersion: 1 });
     }
 
+    if (url.pathname === "/v1/search/reverse" && request.method === "GET") {
+      const latitude = validCoordinate(url.searchParams.get("lat"), -90, 90);
+      const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
+      if (latitude === null || longitude === null) {
+        return json({ ok: false, error: "إحداثيات الموقع غير صالحة." }, 400);
+      }
+      const cacheKey = "reverse-country:v1:" + latitude.toFixed(3) + ":" + longitude.toFixed(3);
+      return cachedJson(env, cacheKey, 86400, async () => {
+        let countryCode = "";
+        let country = "";
+        try {
+          const target = new URL("https://nominatim.openstreetmap.org/reverse");
+          target.searchParams.set("lat", String(latitude));
+          target.searchParams.set("lon", String(longitude));
+          target.searchParams.set("format", "jsonv2");
+          target.searchParams.set("addressdetails", "1");
+          target.searchParams.set("zoom", "10");
+          target.searchParams.set("accept-language", "ar,en");
+          const response = await fetchNominatim(target.toString(), {
+            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+            signal: AbortSignal.timeout(9000)
+          });
+          if (response.ok) {
+            const payload = await response.json();
+            countryCode = String(payload.address?.country_code || "").toLowerCase();
+            country = String(payload.address?.country || "");
+          }
+        } catch (error) {
+          console.warn("[HorusSearch] Nominatim reverse lookup failed", String(error?.message || error).slice(0, 120));
+        }
+
+        if (!/^[a-z]{2}$/.test(countryCode)) {
+          try {
+            const target = new URL("https://photon.komoot.io/reverse");
+            target.searchParams.set("lat", String(latitude));
+            target.searchParams.set("lon", String(longitude));
+            target.searchParams.set("limit", "1");
+            target.searchParams.set("lang", "en");
+            const response = await fetch(target.toString(), {
+              headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+              signal: AbortSignal.timeout(8000)
+            });
+            if (response.ok) {
+              const payload = await response.json();
+              const properties = payload.features?.[0]?.properties || {};
+              countryCode = String(properties.countrycode || "").toLowerCase();
+              country = String(properties.country || country);
+            }
+          } catch (error) {
+            console.warn("[HorusSearch] Photon reverse lookup failed", String(error?.message || error).slice(0, 120));
+          }
+        }
+
+        if (!/^[a-z]{2}$/.test(countryCode)) {
+          return json({ ok: false, error: "تعذر تحديد الدولة من إحداثيات الموقع حاليًا." }, 503);
+        }
+        return json({
+          ok: true,
+          countryCode,
+          country: country || countryNameFromCode(countryCode.toUpperCase()),
+          latitude,
+          longitude,
+          provider: country ? "Nominatim / Photon" : "OpenStreetMap"
+        });
+      });
+    }
+
     if (url.pathname === "/v1/config" && request.method === "GET") {
       try {
         const stored = env.HORUS_MAPS_CONFIG
@@ -958,113 +1613,757 @@ export default {
       const latitude = validCoordinate(url.searchParams.get("lat"), -90, 90);
       const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
       const language = String(url.searchParams.get("lang") || "ar,en").slice(0, 32);
-      const cacheKey = "geocode:v2:" + queryVariants.join("|").toLocaleLowerCase() + ":" + language + ":" +
+      const cacheKey = "geocode:v3:" + queryVariants.join("|").toLocaleLowerCase() + ":" + language + ":" +
         (latitude === null ? "" : latitude.toFixed(2)) + ":" + (longitude === null ? "" : longitude.toFixed(2));
       return cachedJson(env, cacheKey, 86400, async () => {
-        const target = new URL("https://nominatim.openstreetmap.org/search");
-        target.searchParams.set("q", queryVariants[0]);
-        target.searchParams.set("format", "geojson");
-        target.searchParams.set("polygon_geojson", "1");
-        target.searchParams.set("polygon_threshold", "0.003");
-        target.searchParams.set("addressdetails", "1");
-        target.searchParams.set("limit", "8");
-        target.searchParams.set("accept-language", language);
+        const nominatimTarget = new URL("https://nominatim.openstreetmap.org/search");
+        nominatimTarget.searchParams.set("q", queryVariants[0]);
+        nominatimTarget.searchParams.set("format", "geojson");
+        nominatimTarget.searchParams.set("polygon_geojson", "1");
+        nominatimTarget.searchParams.set("polygon_threshold", "0.003");
+        nominatimTarget.searchParams.set("addressdetails", "1");
+        nominatimTarget.searchParams.set("namedetails", "1");
+        nominatimTarget.searchParams.set("extratags", "1");
+        nominatimTarget.searchParams.set("limit", "12");
+        nominatimTarget.searchParams.set("accept-language", language);
         if (latitude !== null && longitude !== null) {
           const delta = 3;
-          target.searchParams.set("viewbox", [
+          nominatimTarget.searchParams.set("viewbox", [
             longitude - delta, latitude + delta, longitude + delta, latitude - delta
           ].join(","));
         }
-        let payload = null;
+
+        let nominatimPayload = null;
         try {
-          const response = await fetchNominatim(target.toString(), {
+          const response = await fetchNominatim(nominatimTarget.toString(), {
+            headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+            signal: AbortSignal.timeout(9000)
+          });
+          if (response.ok) nominatimPayload = await response.json();
+          else console.warn("[HorusSearch] Nominatim returned HTTP", response.status);
+        } catch (error) {
+          console.warn("[HorusSearch] Nominatim unavailable", String(error?.message || error).slice(0, 120));
+        }
+
+        // Query Photon independently even when Nominatim returned results. The
+        // providers have different ranking/index coverage, especially for
+        // named streets, schools and small settlements.
+        const photonTasks = queryVariants.slice(0, 3).map(async variant => {
+          const target = new URL("https://photon.komoot.io/api/");
+          target.searchParams.set("q", variant);
+          target.searchParams.set("limit", "10");
+          target.searchParams.set("lang", language.split(",")[0] || "en");
+          if (latitude !== null && longitude !== null) {
+            target.searchParams.set("lat", String(latitude));
+            target.searchParams.set("lon", String(longitude));
+          }
+          const response = await fetch(target.toString(), {
             headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
             signal: AbortSignal.timeout(8000)
           });
-          if (response.ok) payload = await response.json();
-          else console.warn("[HorusSearch] Nominatim returned HTTP", response.status);
-        } catch (error) {
-          console.warn("[HorusSearch] Nominatim unavailable; trying fallback", String(error?.message || error).slice(0, 120));
+          if (!response.ok) return [];
+          const data = await response.json();
+          return Array.isArray(data.features) ? data.features : [];
+        });
+        const photonResults = await Promise.allSettled(photonTasks);
+        const photonFeatures = photonResults.flatMap(result => result.status === "fulfilled" ? result.value : []);
+        const nominatimFeatures = Array.isArray(nominatimPayload?.features) ? nominatimPayload.features : [];
+        const merged = [];
+        const seen = new Set();
+        for (const feature of [...nominatimFeatures, ...photonFeatures]) {
+          const properties = feature?.properties || {};
+          const coordinatePairs = [];
+          const collectPairs = value => {
+            if (!Array.isArray(value)) return;
+            if (value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number") {
+              coordinatePairs.push([value[0], value[1]]);
+              return;
+            }
+            for (const child of value) collectPairs(child);
+          };
+          collectPairs(feature?.geometry?.coordinates);
+          if (!coordinatePairs.length) continue;
+          const longitudeValue = coordinatePairs.reduce((sum, point) => sum + point[0], 0) / coordinatePairs.length;
+          const latitudeValue = coordinatePairs.reduce((sum, point) => sum + point[1], 0) / coordinatePairs.length;
+          if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue) ||
+              latitudeValue < -90 || latitudeValue > 90 || longitudeValue < -180 || longitudeValue > 180) continue;
+          const osmKey = properties.osm_type && properties.osm_id
+            ? String(properties.osm_type) + "/" + String(properties.osm_id)
+            : "";
+          const normalizedName = normalizeSearchText(properties.name || properties.street || properties.display_name || "");
+          const locationKey = latitudeValue.toFixed(5) + ":" + longitudeValue.toFixed(5);
+          const key = osmKey || (normalizedName + ":" + locationKey);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const displayName = properties.display_name || [
+            properties.name, properties.street, properties.housenumber,
+            properties.city || properties.town || properties.village,
+            properties.state, properties.country
+          ].filter(Boolean).join(", ");
+          merged.push({
+            ...feature,
+            properties: {
+              ...properties,
+              name: properties.name || properties.street || properties.city || properties.village || properties.country || rawQuery,
+              display_name: displayName || rawQuery,
+              type: properties.type || properties.osm_value || properties.osm_key || properties.layer || "place",
+              source: properties.osm_type ? "nominatim" : "photon"
+            }
+          });
         }
 
-        // Nominatim may throttle or return no matches for some names. Photon is
-        // a second independent OSM geocoder so ordinary places remain searchable.
-        if (!payload || !Array.isArray(payload.features) || payload.features.length === 0) {
-          for (const variant of queryVariants) {
-            const fallback = new URL("https://photon.komoot.io/api/");
-            fallback.searchParams.set("q", variant);
-            fallback.searchParams.set("limit", "8");
-            fallback.searchParams.set("lang", language.split(",")[0] || "en");
-            if (latitude !== null && longitude !== null) {
-              fallback.searchParams.set("lat", String(latitude));
-              fallback.searchParams.set("lon", String(longitude));
-            }
-            const fallbackResponse = await fetch(fallback.toString(), {
-              headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
-              signal: AbortSignal.timeout(8000)
-            });
-            if (fallbackResponse.ok) {
-              payload = await fallbackResponse.json();
-              if (Array.isArray(payload.features) && payload.features.length > 0) break;
-            }
-          }
-          if (payload && Array.isArray(payload.features)) {
-              payload.features = payload.features.map(feature => {
-                const properties = feature.properties || {};
-                const displayName = [
-                  properties.name,
-                  properties.street,
-                  properties.housenumber,
-                  properties.city || properties.town || properties.village,
-                  properties.state,
-                  properties.country
-                ].filter(Boolean).join(", ");
-                return {
-                  ...feature,
-                  properties: {
-                    ...properties,
-                    name: properties.name || properties.street || properties.city || properties.country || query,
-                    display_name: properties.display_name || displayName || query,
-                    type: properties.type || properties.osm_value || "place"
-                  }
-                };
-            });
-          }
-        }
-
-        if (!payload || !Array.isArray(payload.features)) {
+        if (merged.length === 0 && !nominatimPayload && photonResults.every(result => result.status === "rejected")) {
           return json({ ok: false, error: "تعذر الاتصال بخدمات البحث الجغرافي الآن." }, 503);
         }
-        return json({ ok: true, ...payload });
+
+        const wantedNames = new Set(queryVariants.map(normalizeSearchText));
+        const queryTokens = normalizeSearchText(rawQuery).split(" ").filter(Boolean);
+        const scoreFeature = feature => {
+          const properties = feature.properties || {};
+          const name = normalizeSearchText(properties.name || properties.street || "");
+          const display = normalizeSearchText(properties.display_name || "");
+          const exact = wantedNames.has(name) ? 100 : wantedNames.has(display) ? 85 : 0;
+          const tokenHits = queryTokens.filter(token => name.includes(token) || display.includes(token)).length;
+          const importance = Math.max(0, Math.min(1, Number(properties.importance) || 0));
+          const placeRank = Math.max(0, 30 - (Number(properties.place_rank) || 30)) / 3;
+          const coords = feature.geometry?.coordinates;
+          let proximity = 0;
+          if (latitude !== null && longitude !== null && Array.isArray(coords)) {
+            const pairs = [];
+            const collect = value => {
+              if (!Array.isArray(value)) return;
+              if (value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number") {
+                pairs.push(value);
+                return;
+              }
+              for (const child of value) collect(child);
+            };
+            collect(coords);
+            if (pairs.length) {
+              const lat = pairs.reduce((sum, point) => sum + point[1], 0) / pairs.length;
+              const lon = pairs.reduce((sum, point) => sum + point[0], 0) / pairs.length;
+              proximity = Math.max(0, 12 - haversineMeters(latitude, longitude, lat, lon) / 150000);
+            }
+          }
+          return exact + tokenHits * 5 + importance * 10 + placeRank + proximity;
+        };
+        merged.sort((left, right) => scoreFeature(right) - scoreFeature(left));
+        return json({ ok: true, type: "FeatureCollection", features: merged.slice(0, 24) });
       });
     }
 
-    if (url.pathname === "/v1/search/reverse" && request.method === "GET") {
-      const latitude = validCoordinate(url.searchParams.get("lat"), -90, 90);
-      const longitude = validCoordinate(url.searchParams.get("lon"), -180, 180);
-      if (latitude === null || longitude === null) return json({ ok: false, error: "إحداثيات الموقع غير صالحة." }, 400);
-      const cacheKey = "reverse:v1:" + latitude.toFixed(3) + ":" + longitude.toFixed(3);
-      return cachedJson(env, cacheKey, 86400, async () => {
-        const target = new URL("https://nominatim.openstreetmap.org/reverse");
-        target.searchParams.set("lat", String(latitude));
-        target.searchParams.set("lon", String(longitude));
-        target.searchParams.set("format", "jsonv2");
-        target.searchParams.set("zoom", "3");
-        target.searchParams.set("addressdetails", "1");
-        target.searchParams.set("accept-language", "ar,en");
-        const response = await fetchNominatim(target.toString(), {
-          headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
-          signal: AbortSignal.timeout(15000)
-        });
-        if (!response.ok) return json({ ok: false, error: "تعذر تحديد الدولة من موقعك." }, response.status);
-        const payload = await response.json();
+
+    if (url.pathname === "/v1/search/transit" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const originLat = validCoordinate(body.originLatitude, -90, 90);
+        const originLon = validCoordinate(body.originLongitude, -180, 180);
+        const destinationLat = validCoordinate(body.destinationLatitude, -90, 90);
+        const destinationLon = validCoordinate(body.destinationLongitude, -180, 180);
+        if ([originLat, originLon, destinationLat, destinationLon].some(value => value === null)) {
+          return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
+        }
+
+        // Discover real OSM rail stations independently from timetable coverage.
+        // A mapped station does not imply that its operator publishes live schedules.
+        let originStations = [], destinationStations = [];
+        try {
+          [originStations, destinationStations] = await Promise.all([
+            findNearestRailStation(originLat, originLon, 50000, env),
+            findNearestRailStation(destinationLat, destinationLon, 50000, env)
+          ]);
+        } catch (stationError) {
+          console.warn("[HorusTransit] Station discovery unavailable", String(stationError?.message || stationError).slice(0, 120));
+          return json({
+            ok: true, provider: "OpenStreetMap + Transitous / MOTIS", available: false,
+            stationDataAvailable: false,
+            message: "تعذر الوصول إلى بيانات المحطات المفتوحة الآن. حاول مرة أخرى لاحقًا.",
+            diagnostic: String(stationError?.message || "station source unavailable").slice(0, 240),
+            originStations: [], destinationStations: [], options: []
+          });
+        }
+        if (!originStations.length || !destinationStations.length) {
+          return json({
+            ok: true, provider: "OpenStreetMap + Transitous / MOTIS", available: false,
+            stationDataAvailable: true,
+            message: !originStations.length
+              ? "لم نعثر على محطة قطار مرسومة في OpenStreetMap ضمن 50 كم من موقعك."
+              : "لم نعثر على محطة قطار مرسومة ضمن 50 كم من الوجهة المحددة.",
+            originStations, destinationStations, options: []
+          });
+        }
+
+        // Query timetable data between the nearest mapped rail stations, not country/city centroids.
+        const planOrigin = originStations[0];
+        const planDestination = destinationStations[0];
+        const departureInput = String(body.departureTime || "");
+        const departure = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(departureInput)
+          ? departureInput : new Date().toISOString();
+        const target = new URL("https://api.transitous.org/api/v6/plan");
+        target.searchParams.set("fromPlace", planOrigin.latitude + "," + planOrigin.longitude);
+        target.searchParams.set("toPlace", planDestination.latitude + "," + planDestination.longitude);
+        target.searchParams.set("time", departure);
+        target.searchParams.set("transitModes", "RAIL");
+        target.searchParams.set("directModes", "WALK");
+        target.searchParams.set("maxTransfers", "3");
+        target.searchParams.set("numItineraries", "5");
+        target.searchParams.set("maxItineraries", "5");
+        target.searchParams.set("searchWindow", "3600");
+        target.searchParams.set("timetableView", "true");
+        target.searchParams.set("detailedLegs", "true");
+        target.searchParams.set("detailedTransfers", "true");
+        target.searchParams.set("joinInterlinedLegs", "false");
+        target.searchParams.set("realtimeMode", "REALTIME");
+        target.searchParams.set("language", "ar,en");
+
+        const timetableCacheKey = "horus:rail-timetable:v1:" +
+          String(planOrigin.stopId || (planOrigin.latitude.toFixed(3) + "," + planOrigin.longitude.toFixed(3))) + ":" +
+          String(planDestination.stopId || (planDestination.latitude.toFixed(3) + "," + planDestination.longitude.toFixed(3))) + ":" +
+          departure.slice(0, 13);
+        let response = { ok: false, status: 503 };
+        let payload = null;
+        if (env.HORUS_MAPS_CONFIG) {
+          try {
+            const cached = await env.HORUS_MAPS_CONFIG.get(timetableCacheKey);
+            if (cached) {
+              payload = JSON.parse(cached);
+              response = { ok: true, status: 200 };
+            }
+          } catch (error) {
+            console.warn("[HorusTransit] Timetable cache read failed", String(error?.message || error).slice(0, 100));
+          }
+        }
+        if (!payload) {
+          response = await fetch(target.toString(), {
+            headers: {
+              "User-Agent": SEARCH_USER_AGENT,
+              "Accept": "application/json"
+            },
+            signal: AbortSignal.timeout(15000)
+          });
+          payload = await response.json().catch(() => ({}));
+          if (response.ok && env.HORUS_MAPS_CONFIG) {
+            try {
+              await env.HORUS_MAPS_CONFIG.put(timetableCacheKey, JSON.stringify(payload), { expirationTtl: 300 });
+            } catch (error) {
+              console.warn("[HorusTransit] Timetable cache write failed", String(error?.message || error).slice(0, 100));
+            }
+          }
+        }
+        if (!response.ok) {
+          console.warn("[HorusTransit] Transitous HTTP", response.status);
+          return json({
+            ok: true, provider: "OpenStreetMap + Transitous / MOTIS", available: false,
+            stationDataAvailable: true, originStations, destinationStations, options: [],
+            message: "وجدنا محطات قريبة، لكن خدمة جداول القطارات غير متاحة مؤقتًا."
+          });
+        }
+
+        const isRailLeg = leg => {
+          const mode = String(leg.mode || "").toUpperCase();
+          const routeType = Number(leg.routeType);
+          return /RAIL|SUBURBAN|SUBWAY|METRO|TRAIN/.test(mode) ||
+            routeType === 2 || (routeType >= 100 && routeType <= 199) ||
+            (routeType >= 400 && routeType <= 499);
+        };
+
+        const decodePolyline = (encoded, precision) => {
+          if (typeof encoded !== "string" || !encoded.length) return [];
+          let index = 0, latitude = 0, longitude = 0;
+          const points = [];
+          const readValue = () => {
+            let result = 0, shift = 0, byte;
+            do {
+              if (index >= encoded.length) throw new Error("Invalid transit polyline");
+              byte = encoded.charCodeAt(index++) - 63;
+              result |= (byte & 0x1f) << shift;
+              shift += 5;
+            } while (byte >= 0x20);
+            return (result & 1) ? ~(result >> 1) : (result >> 1);
+          };
+          const factor = Math.pow(10, precision);
+          while (index < encoded.length) {
+            latitude += readValue();
+            longitude += readValue();
+            points.push([longitude / factor, latitude / factor]);
+          }
+          return points;
+        };
+
+        const itineraries = Array.isArray(payload.itineraries) ? payload.itineraries : [];
+        const options = itineraries.map((itinerary, index) => {
+          const legs = Array.isArray(itinerary.legs) ? itinerary.legs : [];
+          const railLegs = legs.filter(isRailLeg);
+          if (!railLegs.length) return null;
+
+          const normalizedLegs = legs.map(leg => {
+            const from = leg.from || {};
+            const to = leg.to || {};
+            return {
+              mode: String(leg.mode || "TRANSIT"),
+              agencyName: String(leg.agencyName || ""),
+              routeName: String(leg.routeShortName || leg.routeLongName || leg.displayName || ""),
+              headsign: String(leg.headsign || ""),
+              from: String(from.name || ""),
+              to: String(to.name || ""),
+              departure: String(leg.startTime || ""),
+              arrival: String(leg.endTime || ""),
+              scheduledDeparture: String(leg.scheduledStartTime || ""),
+              scheduledArrival: String(leg.scheduledEndTime || ""),
+              durationSeconds: Math.max(0, Number(leg.duration) || 0),
+              realTime: Boolean(leg.realTime),
+              cancelled: Boolean(leg.cancelled)
+            };
+          });
+
+          const coordinates = [];
+          for (const leg of legs) {
+            const geometry = leg.legGeometry || {};
+            const encoded = geometry.points || geometry.encodedPolyline || "";
+            if (!encoded) continue;
+            const precision = Number(geometry.precision) || 6;
+            let decoded = [];
+            try {
+              decoded = decodePolyline(encoded, precision);
+              if (decoded.length < 2 && precision !== 5) decoded = decodePolyline(encoded, 5);
+            } catch {
+              try { decoded = decodePolyline(encoded, precision === 5 ? 6 : 5); } catch {}
+            }
+            if (coordinates.length && decoded.length &&
+                coordinates[coordinates.length - 1][0] === decoded[0][0] &&
+                coordinates[coordinates.length - 1][1] === decoded[0][1]) decoded.shift();
+            coordinates.push(...decoded);
+          }
+
+          const startTime = String(itinerary.startTime || normalizedLegs[0]?.departure || "");
+          const endTime = String(itinerary.endTime || normalizedLegs[normalizedLegs.length - 1]?.arrival || "");
+          return {
+            id: String(index + 1),
+            durationSeconds: Math.max(0, Number(itinerary.duration) || 0),
+            distanceMeters: 0,
+            transfers: Math.max(0, Number(itinerary.transfers) || 0),
+            startTime,
+            endTime,
+            legs: normalizedLegs,
+            geometry: coordinates.length > 1 ? { type: "LineString", coordinates } : null
+          };
+        }).filter(Boolean);
+
         return json({
           ok: true,
-          countryCode: String(payload.address?.country_code || "").toLowerCase(),
-          country: String(payload.address?.country || ""),
-          address: payload.address || {}
+          provider: "OpenStreetMap + Transitous / MOTIS (open data)",
+          departureTime: departure,
+          stationDataAvailable: true,
+          originStations,
+          destinationStations,
+          available: options.length > 0,
+          message: options.length ? null :
+            "وجدنا محطات قريبة، لكن لم نعثر على جدول رحلة مطابق في بيانات النقل المفتوحة لهذا الموعد. وجود المحطة لا يضمن توفر جدول منشور.",
+          options
         });
-      });
+      } catch (error) {
+        console.error("[HorusTransit] Search failed", String(error?.message || error).slice(0, 160));
+        return json({ ok: false, error: "تعذر البحث في جداول القطارات الآن. حاول مرة أخرى." }, 503);
+      }
+    }
+
+    if (url.pathname === "/v1/search/airports" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const originLat = validCoordinate(body.originLatitude, -90, 90);
+        const originLon = validCoordinate(body.originLongitude, -180, 180);
+        const destinationLat = validCoordinate(body.destinationLatitude, -90, 90);
+        const destinationLon = validCoordinate(body.destinationLongitude, -180, 180);
+        if ([originLat, originLon, destinationLat, destinationLon].some(value => value === null)) {
+          return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
+        }
+        const [originAirports, destinationAirports] = await Promise.all([
+          findNearbyOpenAirports(originLat, originLon, env),
+          findNearbyOpenAirports(destinationLat, destinationLon, env)
+        ]);
+        return json({
+          ok: true,
+          provider: "OpenStreetMap / OurAirports open data",
+          originAirports,
+          destinationAirports
+        });
+      } catch (error) {
+        console.error("[HorusAirports] Discovery failed", String(error?.message || error).slice(0, 160));
+        return json({ ok: false, error: "تعذر الوصول إلى مصادر بيانات المطارات المفتوحة حاليًا." }, 503);
+      }
+    }
+
+    if (url.pathname === "/v1/search/flights" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const originLat = validCoordinate(body.originLatitude, -90, 90);
+        const originLon = validCoordinate(body.originLongitude, -180, 180);
+        const destinationLat = validCoordinate(body.destinationLatitude, -90, 90);
+        const destinationLon = validCoordinate(body.destinationLongitude, -180, 180);
+        if ([originLat, originLon, destinationLat, destinationLon].some(value => value === null)) {
+          return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
+        }
+        const date = String(body.date || "");
+        const parsedDate = new Date(date + "T00:00:00Z");
+        if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date) ||
+            Number.isNaN(parsedDate.getTime()) ||
+            parsedDate.toISOString().slice(0, 10) !== date ||
+            date < new Date().toISOString().slice(0, 10)) {
+          return json({ ok: false, error: "حدد تاريخ سفر صحيحًا اليوم أو في المستقبل." }, 400);
+        }
+
+        const ignavConfigured = Boolean(String(env.IGNAV_API_KEY || "").trim());
+        const cacheKey = [
+          "flight-search-v2",
+          originLat.toFixed(2), originLon.toFixed(2),
+          destinationLat.toFixed(2), destinationLon.toFixed(2), date,
+          ignavConfigured ? "ignav-sa" : "legacy"
+        ].join(":");
+        return await cachedJson(env, cacheKey, ignavConfigured ? 1800 : 10800, async () => {
+          const [origins, destinations] = await Promise.all([
+            findNearbyOpenAirports(originLat, originLon, env),
+            findNearbyOpenAirports(destinationLat, destinationLon, env)
+          ]);
+          if (!origins.length || !destinations.length) {
+            return json({
+              ok: true, provider: ignavConfigured ? "OpenStreetMap + Ignav" : "OpenStreetMap airport data + OAG Flight Info",
+              date, available: false, pricesAvailable: false,
+              message: "لم نعثر على مطار يحمل رمز IATA في بيانات المطارات المفتوحة بالقرب من إحدى النقطتين.",
+              options: [], originAirport: origins[0] || null, destinationAirport: destinations[0] || null
+            });
+          }
+
+          const originAirport = origins[0];
+          const destinationAirport = destinations.find(item => item.iataCode !== originAirport.iataCode);
+          if (!destinationAirport) {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + OAG Flight Info",
+              date, available: false, pricesAvailable: false,
+              message: "لم نعثر على مطارين مختلفين مناسبين للمسار المطلوب.",
+              options: [], originAirport, destinationAirport: null
+            });
+          }
+
+          const ignavKey = String(env.IGNAV_API_KEY || "").trim();
+          if (ignavKey) {
+            const response = await fetch("https://ignav.com/api/fares/one-way", {
+              method: "POST",
+              headers: {
+                "X-Api-Key": ignavKey,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": SEARCH_USER_AGENT
+              },
+              body: JSON.stringify({
+                origin: originAirport.iataCode,
+                destination: destinationAirport.iataCode,
+                departure_date: date,
+                adults: 1,
+                cabin_class: "economy",
+                market: "SA",
+                allow_self_transfer: false
+              }),
+              signal: AbortSignal.timeout(20000)
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+              const message = response.status === 401 || response.status === 403
+                ? "مفتاح Ignav غير صالح أو لا يملك صلاحية البحث. راجع المفتاح في Cloudflare Preview."
+                : response.status === 429
+                  ? "تم استهلاك حد الطلبات المتاح من Ignav مؤقتًا. ستظل النتائج المخزنة متاحة حتى انتهاء التخزين المؤقت."
+                  : "تعذر الحصول على عروض الطيران من Ignav حاليًا.";
+              return json({ ok: false, provider: "Ignav", code: "IGNAV_REQUEST_FAILED", error: message }, 503);
+            }
+            const itineraries = Array.isArray(payload.itineraries) ? payload.itineraries : [];
+            const normalized = itineraries
+              .map(item => normalizeIgnavFlight(item, originAirport, destinationAirport, String(payload.observed_at || "")))
+              .filter(item => item && item.flightNumber && item.departure && item.arrival)
+              .sort((a, b) => a.departure.localeCompare(b.departure));
+            const priceOffers = itineraries
+              .map(item => normalizeIgnavPriceOffer(item, String(payload.observed_at || "")))
+              .filter(Boolean)
+              .sort((a, b) => a.price - b.price)
+              .slice(0, 10);
+            return json({
+              ok: true,
+              provider: "OpenStreetMap + Ignav",
+              priceProvider: "Ignav",
+              date,
+              available: normalized.length > 0,
+              pricesAvailable: priceOffers.length > 0,
+              priceMessage: priceOffers.length
+                ? "أسعار من Ignav؛ قد يعاد استخدام نتيجة البحث لمدة تصل إلى 30 دقيقة. قد تتغير الأسعار والتوافر، لذا تحقق من السعر النهائي قبل الدفع."
+                : "لم تتوفر أسعار لهذا المسار والتاريخ من Ignav.",
+              message: normalized.length
+                ? "عروض الرحلات والأسعار من Ignav. قد تشمل الرحلات المباشرة أو رحلات التوقف وفق النتائج المتاحة."
+                : "لم يعثر Ignav على عروض لهذا المسار والتاريخ. جرّب تاريخًا آخر أو مطارًا مختلفًا.",
+              originAirport,
+              destinationAirport,
+              options: normalized,
+              priceOffers,
+              observedAt: String(payload.observed_at || "")
+            });
+          }
+
+          const oagKey = String(env.OAG_SUBSCRIPTION_KEY || "").trim();
+          if (!oagKey) {
+            return json({
+              ok: true, provider: "OpenStreetMap airport data + OAG Flight Info",
+              date, available: false, pricesAvailable: false,
+              error: "محرك المطارات جاهز، لكن جداول الرحلات تحتاج مفتاح OAG. أنشئ حساب المطوّرين واشترك في Flight Info المجاني، ثم احفظ المفتاح في Cloudflare باسم OAG_SUBSCRIPTION_KEY."
+            }, 503);
+          }
+
+          const target = new URL("https://api.oag.com/flight-instances/");
+          target.searchParams.set("DepartureDateTime", date);
+          target.searchParams.set("ArrivalDateTime", date);
+          target.searchParams.set("DepartureAirport", originAirport.iataCode);
+          target.searchParams.set("ArrivalAirport", destinationAirport.iataCode);
+          target.searchParams.set("CodeType", "IATA,ICAO");
+          target.searchParams.set("FlightType", "scheduled");
+          target.searchParams.set("ServiceType", "Passenger");
+          target.searchParams.set("version", "v2");
+          target.searchParams.set("Limit", "10");
+          const response = await fetch(target.toString(), {
+            headers: {
+              "Subscription-Key": oagKey,
+              "Ocp-Apim-Subscription-Key": oagKey,
+              "Accept": "application/json",
+              "User-Agent": SEARCH_USER_AGENT
+            },
+            signal: AbortSignal.timeout(18000)
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (response.status === 401) {
+            return json({
+              ok: true, provider: "OAG Flight Info",
+              date, available: false, pricesAvailable: false,
+              error: "مفتاح OAG غير صالح أو غير مفعّل. تحقق من اشتراك Flight Info والمفتاح في لوحة OAG."
+            }, 503);
+          }
+          if (response.status === 403) {
+            return json({
+              ok: true, provider: "OAG Flight Info",
+              date, available: false, pricesAvailable: false,
+              error: "اشتراك OAG الحالي لا يملك صلاحية Flight Info. تأكد من تفعيل الخطة المجانية للواجهة المطلوبة."
+            }, 503);
+          }
+          if (response.status === 429) {
+            return json({
+              ok: true, provider: "OAG Flight Info",
+              date, available: false, pricesAvailable: false,
+              error: "وصلت إلى حد استخدام OAG المتاح لهذه الفترة. النتائج المحفوظة تظل متاحة حتى انتهاء التخزين المؤقت."
+            }, 503);
+          }
+          if (!response.ok) throw new Error("OAG Flight Info HTTP " + response.status);
+          const flights = Array.isArray(payload.data) ? payload.data : [];
+          const options = flights.map(item => normalizeOagFlight(item, originAirport, destinationAirport))
+            .filter(item => item.flightNumber && item.departure && item.arrival)
+            .sort((a, b) => a.departure.localeCompare(b.departure));
+          const priceResult = await fetchTravelpayoutsPriceOffers(
+            env, originAirport.iataCode, destinationAirport.iataCode, date
+          );
+          return json({
+            ok: true,
+            provider: "OpenStreetMap + OAG Flight Info",
+            priceProvider: "Travelpayouts Aviasales Data API",
+            date,
+            available: options.length > 0,
+            pricesAvailable: priceResult.offers.length > 0,
+            priceMessage: priceResult.message,
+            priceOffers: priceResult.offers,
+            message: options.length
+              ? "هذه مواعيد وجداول رحلات منشورة من OAG. تأكد من شركة الطيران قبل السفر."
+              : "لم يعثر OAG على رحلات ركاب مجدولة مباشرة بين المطارين في التاريخ المحدد.",
+            originAirport,
+            destinationAirport,
+            options
+          });
+        });
+      } catch (error) {
+        console.error("[HorusFlights] Flight search failed", String(error?.message || error).slice(0, 160));
+        return json({
+          ok: false,
+          provider: "HorusMaps flight search",
+          code: "FLIGHT_SEARCH_FAILED",
+          error: error?.message || "تعذر البحث عن رحلات الطيران الآن."
+        }, 503);
+      }
+    }
+
+    if (url.pathname === "/v1/search/flights/booking-links" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const ignavId = String(body.ignavId || "").trim().slice(0, 120);
+        if (!/^[A-Za-z0-9_-]{12,120}$/.test(ignavId)) {
+          return json({ ok: false, error: "معرّف عرض الطيران غير صالح." }, 400);
+        }
+        const ignavKey = String(env.IGNAV_API_KEY || "").trim();
+        if (!ignavKey) {
+          return json({ ok: false, error: "روابط الحجز تحتاج إعداد مفتاح Ignav على خادم Preview." }, 503);
+        }
+        return await cachedJson(env, "ignav-booking-links-v1:" + ignavId, 300, async () => {
+          const response = await fetch("https://ignav.com/api/fares/booking-links", {
+            method: "POST",
+            headers: {
+              "X-Api-Key": ignavKey,
+              "Content-Type": "application/json",
+              "Accept": "application/json",
+              "User-Agent": SEARCH_USER_AGENT
+            },
+            body: JSON.stringify({ ignav_id: ignavId }),
+            signal: AbortSignal.timeout(15000)
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            const message = response.status === 401 || response.status === 403
+              ? "مفتاح Ignav غير صالح أو لا يملك صلاحية روابط الحجز."
+              : "تعذر جلب روابط الحجز لهذا العرض الآن.";
+            return json({ ok: false, error: message }, 503);
+          }
+          const links = (Array.isArray(payload.booking_options) ? payload.booking_options : [])
+            .flatMap(option => Array.isArray(option.links) ? option.links : [])
+            .map(link => {
+              const rawUrl = String(link.url || "").trim();
+              if (!rawUrl) return null;
+              try {
+                const hasScheme = /^https?:\/\//i.test(rawUrl);
+                const url = new URL(hasScheme ? rawUrl : "https://" + rawUrl);
+                if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return null;
+                return {
+                  providerName: String(link.provider_name || "موقع الحجز"),
+                  providerType: String(link.provider_type || ""),
+                  price: Number.isFinite(Number(link.price?.amount)) ? Number(link.price.amount) : null,
+                  currency: String(link.price?.currency || ""),
+                  url: url.toString()
+                };
+              } catch (_) {
+                return null;
+              }
+            })
+            .filter(Boolean)
+            .slice(0, 12);
+          return json({
+            ok: true,
+            links,
+            message: links.length
+              ? "روابط الحجز متاحة. راجع السعر النهائي وشروط الأمتعة قبل الدفع."
+              : "لم يوفر Ignav رابط حجز صالحًا لهذا العرض حاليًا."
+          });
+        });
+      } catch (error) {
+        console.error("[HorusFlights] Booking-link lookup failed", String(error?.message || error).slice(0, 160));
+        return json({ ok: false, error: "تعذر جلب روابط الحجز الآن." }, 503);
+      }
+    }
+
+    if (url.pathname === "/v1/search/route" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const originLat = validCoordinate(body.originLatitude, -90, 90);
+        const originLon = validCoordinate(body.originLongitude, -180, 180);
+        const destinationLat = validCoordinate(body.destinationLatitude, -90, 90);
+        const destinationLon = validCoordinate(body.destinationLongitude, -180, 180);
+        const mode = String(body.mode || "driving").toLowerCase();
+        if ([originLat, originLon, destinationLat, destinationLon].some(value => value === null)) {
+          return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
+        }
+        if (!["driving", "walking"].includes(mode)) {
+          return json({
+            ok: false,
+            error: mode === "transit"
+              ? "مسارات القطارات تحتاج إلى بيانات جداول ومشغّلي النقل في المنطقة."
+              : "الملاحة الجوية غير متاحة كمسار قيادة أو مشي. يمكن عرض المسافة الجوية كتقدير منفصل."
+          }, 422);
+        }
+
+        const straightLineMeters = haversineMeters(originLat, originLon, destinationLat, destinationLon);
+        if (mode === "walking" && straightLineMeters > 40000) {
+          return json({
+            ok: false,
+            code: "WALKING_DISTANCE_EXCEEDED",
+            straightLineDistanceMeters: Math.round(straightLineMeters),
+            error: "المسافة بعيدة جدًا للمشي (أكثر من 40 كم بخط مستقيم). اختر السيارة أو وسيلة نقل بين المدن."
+          }, 422);
+        }
+
+        let routeData;
+        if (mode === "driving") {
+          // OSRM is the primary road router. If it has no route or is temporarily
+          // unavailable, retry with Valhalla's global auto profile before failing.
+          try {
+            const target = new URL(
+              "https://router.project-osrm.org/route/v1/driving/" +
+              originLon + "," + originLat + ";" + destinationLon + "," + destinationLat
+            );
+            target.searchParams.set("overview", "full");
+            target.searchParams.set("geometries", "geojson");
+            target.searchParams.set("steps", "true");
+            const response = await fetch(target.toString(), {
+              headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+              signal: AbortSignal.timeout(12000)
+            });
+            if (!response.ok) throw new Error("OSRM HTTP " + response.status);
+            const payload = await response.json();
+            const route = payload.routes?.[0];
+            if (payload.code !== "Ok" || !route?.geometry?.coordinates?.length) {
+              throw new Error("OSRM found no drivable route");
+            }
+            let cumulativeMeters = 0;
+            const steps = (route.legs?.[0]?.steps || []).map(step => {
+              const maneuver = step.maneuver || {};
+              const location = maneuver.location || [];
+              const normalized = {
+                type: String(maneuver.type || "continue"),
+                modifier: String(maneuver.modifier || ""),
+                name: String(step.name || ""),
+                distanceFromStartMeters: Math.round(cumulativeMeters),
+                distanceMeters: Math.round(Number(step.distance) || 0),
+                durationSeconds: Math.round(Number(step.duration) || 0),
+                longitude: Number(location[0]),
+                latitude: Number(location[1])
+              };
+              cumulativeMeters += Number(step.distance) || 0;
+              return normalized;
+            }).filter(step => Number.isFinite(step.latitude) && Number.isFinite(step.longitude));
+            routeData = {
+              distanceMeters: Number(route.distance),
+              durationSeconds: Number(route.duration),
+              geometry: route.geometry,
+              steps,
+              provider: "OSRM"
+            };
+          } catch (osrmError) {
+            console.warn("[HorusRoute] OSRM failed; trying Valhalla auto", String(osrmError?.message || osrmError).slice(0, 140));
+            routeData = await fetchValhallaRoute(originLat, originLon, destinationLat, destinationLon, "auto");
+          }
+        } else {
+          routeData = await fetchValhallaRoute(originLat, originLon, destinationLat, destinationLon, "pedestrian");
+        }
+
+        if (!Number.isFinite(routeData.distanceMeters) ||
+            !Number.isFinite(routeData.durationSeconds) ||
+            !routeData.geometry?.coordinates?.length) {
+          throw new Error("Router returned incomplete route data");
+        }
+        return json({
+          ok: true,
+          mode,
+          distanceMeters: Math.round(routeData.distanceMeters),
+          durationSeconds: Math.round(routeData.durationSeconds),
+          geometry: routeData.geometry,
+          steps: routeData.steps,
+          provider: routeData.provider
+        });
+      } catch (error) {
+        console.error("[HorusRoute] Route request failed", String(error?.message || error).slice(0, 180));
+        return json({
+          ok: false,
+          error: error?.status === 422
+            ? (error.message || "لا يوجد مسار مناسب لوسيلة الانتقال المختارة.")
+            : "تعذر العثور على مسار صالح بين النقطتين. تحقق من إمكانية الوصول أو حاول مرة أخرى."
+        }, Number(error?.status) || 503);
+      }
     }
 
     if (url.pathname === "/v1/search/places" && request.method === "POST") {

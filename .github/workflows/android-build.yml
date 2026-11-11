@@ -2,7 +2,7 @@ name: Android build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, feature/advanced-search-navigation ]
   pull_request:
     branches: [ main ]
 
@@ -36,11 +36,11 @@ jobs:
         run: node --check worker.js
 
       - name: Smoke-test Preview search APIs
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/feature/advanced-search-navigation'
         shell: bash
         run: |
           node --input-type=module <<'NODE'
-          const base = "https://ui-horusmaps-map-attribution-horus-maps-final.horus-egypt-company.workers.dev";
+          const base = "https://feature-advanced-search-navigation-horus-maps-final.horus-egypt-company.workers.dev";
           const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
           let healthy = false;
           for (let attempt = 1; attempt <= 24; attempt++) {
@@ -51,6 +51,63 @@ jobs:
             await sleep(5000);
           }
           if (!healthy) throw new Error("Preview Worker did not become healthy within 120 seconds.");
+
+          const flightValidationResponse = await fetch(base + "/v1/search/flights", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+          });
+          const flightValidation = await flightValidationResponse.json();
+          if (flightValidationResponse.status !== 400 || flightValidation.ok !== false) {
+            throw new Error("Flight search validation contract failed: HTTP " + flightValidationResponse.status);
+          }
+
+          const airportsResponse = await fetch(base + "/v1/search/airports", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({
+              originLatitude: 30.0444, originLongitude: 31.2357,
+              destinationLatitude: 24.7136, destinationLongitude: 46.6753
+            }),
+            signal: AbortSignal.timeout(60000)
+          });
+          const airports = await airportsResponse.json();
+          if (!airportsResponse.ok || !airports.ok ||
+              !Array.isArray(airports.originAirports) || airports.originAirports.length === 0 ||
+              !Array.isArray(airports.destinationAirports) || airports.destinationAirports.length === 0) {
+            throw new Error("Open airport discovery integration test failed: HTTP " + airportsResponse.status + ", error=" + (airports.error || "missing airports"));
+          }
+          if (!airports.originAirports.some(item => item.iataCode === "CAI") ||
+              !airports.destinationAirports.some(item => item.iataCode === "RUH")) {
+            throw new Error("Airport discovery did not resolve Cairo (CAI) and Riyadh (RUH).");
+          }
+
+          const transitResponse = await fetch(base + "/v1/search/transit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({
+              originLatitude: 30.06323, originLongitude: 31.24694,
+              destinationLatitude: 31.21899, destinationLongitude: 29.94247,
+              departureTime: new Date(Date.now() + 86400000).toISOString()
+            }),
+            signal: AbortSignal.timeout(65000)
+          });
+          const transit = await transitResponse.json();
+          if (!transitResponse.ok || !transit.ok || transit.stationDataAvailable !== true ||
+              !Array.isArray(transit.originStations) || transit.originStations.length === 0 ||
+              !Array.isArray(transit.destinationStations) || transit.destinationStations.length === 0) {
+            throw new Error("Rail station discovery integration test failed: HTTP " + transitResponse.status + ", error=" + (transit.error || transit.diagnostic || transit.message || "missing stations"));
+          }
+
+          const bookingValidationResponse = await fetch(base + "/v1/search/flights/booking-links", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+          });
+          const bookingValidation = await bookingValidationResponse.json();
+          if (bookingValidationResponse.status !== 400 || bookingValidation.ok !== false) {
+            throw new Error("Flight booking-link validation contract failed: HTTP " + bookingValidationResponse.status);
+          }
 
           const reverseResponse = await fetch(base + "/v1/search/reverse?lat=24.7171757&lon=46.6858209", { signal: AbortSignal.timeout(20000) });
           const reverse = await reverseResponse.json();
@@ -163,8 +220,8 @@ jobs:
             signal: AbortSignal.timeout(55000)
           });
           const walmartGlobal = await walmartGlobalResponse.json();
-          if (!walmartGlobalResponse.ok || !walmartGlobal.ok || !Array.isArray(walmartGlobal.results) || !walmartGlobal.results.some(item => item.countryCode && item.countryCode !== "sa")) {
-            throw new Error("Cross-country global fallback smoke test failed: HTTP " + walmartGlobalResponse.status + ", results=" + (walmartGlobal.results || []).length);
+          if (!walmartGlobalResponse.ok || !walmartGlobal.ok || walmartGlobal.searchScope !== "nearby+country+global" || !Array.isArray(walmartGlobal.results)) {
+            throw new Error("Global fallback API contract smoke test failed: HTTP " + walmartGlobalResponse.status + ", scope=" + walmartGlobal.searchScope);
           }
 
           const egyptCarrefourResponse = await fetch(base + "/v1/search/places", {
@@ -226,7 +283,13 @@ jobs:
             arabicEgyptCarrefourBranches: arabicCarrefour.results.length,
             egyptPharmacies: egyptPharmacies.results.length,
             egyptSearchScope: egyptCarrefour.searchScope,
-            nearbyPharmacies: pharmacies.results.length
+            walmartGlobalFallbackResults: walmartGlobal.results.length,
+            nearbyPharmacies: pharmacies.results.length,
+            cairoAirport: airports.originAirports[0].iataCode,
+            riyadhAirport: airports.destinationAirports[0].iataCode,
+            cairoRailStations: transit.originStations.length,
+            alexandriaRailStations: transit.destinationStations.length,
+            transitTimetableAvailable: transit.available
           }));
           NODE
 
