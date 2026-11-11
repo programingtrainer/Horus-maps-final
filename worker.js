@@ -1785,14 +1785,40 @@ export default {
         target.searchParams.set("realtimeMode", "REALTIME");
         target.searchParams.set("language", "ar,en");
 
-        const response = await fetch(target.toString(), {
-          headers: {
-            "User-Agent": SEARCH_USER_AGENT,
-            "Accept": "application/json"
-          },
-          signal: AbortSignal.timeout(25000)
-        });
-        const payload = await response.json().catch(() => ({}));
+        const timetableCacheKey = "horus:rail-timetable:v1:" +
+          String(planOrigin.stopId || (planOrigin.latitude.toFixed(3) + "," + planOrigin.longitude.toFixed(3))) + ":" +
+          String(planDestination.stopId || (planDestination.latitude.toFixed(3) + "," + planDestination.longitude.toFixed(3))) + ":" +
+          departure.slice(0, 13);
+        let response = { ok: false, status: 503 };
+        let payload = null;
+        if (env.HORUS_MAPS_CONFIG) {
+          try {
+            const cached = await env.HORUS_MAPS_CONFIG.get(timetableCacheKey);
+            if (cached) {
+              payload = JSON.parse(cached);
+              response = { ok: true, status: 200 };
+            }
+          } catch (error) {
+            console.warn("[HorusTransit] Timetable cache read failed", String(error?.message || error).slice(0, 100));
+          }
+        }
+        if (!payload) {
+          response = await fetch(target.toString(), {
+            headers: {
+              "User-Agent": SEARCH_USER_AGENT,
+              "Accept": "application/json"
+            },
+            signal: AbortSignal.timeout(15000)
+          });
+          payload = await response.json().catch(() => ({}));
+          if (response.ok && env.HORUS_MAPS_CONFIG) {
+            try {
+              await env.HORUS_MAPS_CONFIG.put(timetableCacheKey, JSON.stringify(payload), { expirationTtl: 300 });
+            } catch (error) {
+              console.warn("[HorusTransit] Timetable cache write failed", String(error?.message || error).slice(0, 100));
+            }
+          }
+        }
         if (!response.ok) {
           console.warn("[HorusTransit] Transitous HTTP", response.status);
           return json({
