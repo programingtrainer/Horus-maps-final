@@ -36,7 +36,7 @@ jobs:
         run: node --check worker.js
 
       - name: Smoke-test Preview search APIs
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/feature/advanced-search-navigation'
         shell: bash
         run: |
           node --input-type=module <<'NODE'
@@ -60,6 +60,43 @@ jobs:
           const flightValidation = await flightValidationResponse.json();
           if (flightValidationResponse.status !== 400 || flightValidation.ok !== false) {
             throw new Error("Flight search validation contract failed: HTTP " + flightValidationResponse.status);
+          }
+
+          const airportsResponse = await fetch(base + "/v1/search/airports", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({
+              originLatitude: 30.0444, originLongitude: 31.2357,
+              destinationLatitude: 24.7136, destinationLongitude: 46.6753
+            }),
+            signal: AbortSignal.timeout(60000)
+          });
+          const airports = await airportsResponse.json();
+          if (!airportsResponse.ok || !airports.ok ||
+              !Array.isArray(airports.originAirports) || airports.originAirports.length === 0 ||
+              !Array.isArray(airports.destinationAirports) || airports.destinationAirports.length === 0) {
+            throw new Error("Open airport discovery integration test failed: HTTP " + airportsResponse.status + ", error=" + (airports.error || "missing airports"));
+          }
+          if (!airports.originAirports.some(item => item.iataCode === "CAI") ||
+              !airports.destinationAirports.some(item => item.iataCode === "RUH")) {
+            throw new Error("Airport discovery did not resolve Cairo (CAI) and Riyadh (RUH).");
+          }
+
+          const transitResponse = await fetch(base + "/v1/search/transit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({
+              originLatitude: 30.0626, originLongitude: 31.2469,
+              destinationLatitude: 31.2001, destinationLongitude: 29.9187,
+              departureTime: new Date(Date.now() + 86400000).toISOString()
+            }),
+            signal: AbortSignal.timeout(65000)
+          });
+          const transit = await transitResponse.json();
+          if (!transitResponse.ok || !transit.ok || transit.stationDataAvailable !== true ||
+              !Array.isArray(transit.originStations) || transit.originStations.length === 0 ||
+              !Array.isArray(transit.destinationStations) || transit.destinationStations.length === 0) {
+            throw new Error("Rail station discovery integration test failed: HTTP " + transitResponse.status + ", error=" + (transit.error || transit.message || "missing stations"));
           }
 
           const bookingValidationResponse = await fetch(base + "/v1/search/flights/booking-links", {
@@ -247,7 +284,12 @@ jobs:
             egyptPharmacies: egyptPharmacies.results.length,
             egyptSearchScope: egyptCarrefour.searchScope,
             walmartGlobalFallbackResults: walmartGlobal.results.length,
-            nearbyPharmacies: pharmacies.results.length
+            nearbyPharmacies: pharmacies.results.length,
+            cairoAirport: airports.originAirports[0].iataCode,
+            riyadhAirport: airports.destinationAirports[0].iataCode,
+            cairoRailStations: transit.originStations.length,
+            alexandriaRailStations: transit.destinationStations.length,
+            transitTimetableAvailable: transit.available
           }));
           NODE
 
