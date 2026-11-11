@@ -155,7 +155,7 @@ async function findAirportsFromOurAirports(latitude, longitude, env) {
     }
   }
 
-  const lines = csv.split(/\\r?\\n/);
+  const lines = csv.split(/\r?\n/);
   const headers = parseCsvRecord(lines.shift() || "");
   const column = name => headers.indexOf(name);
   const typeIndex = column("type"), iataIndex = column("iata_code");
