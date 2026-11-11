@@ -1292,21 +1292,21 @@ async function findNearestRailStationFromTransitous(latitude, longitude, radiusM
 }
 
 async function findRailStationsFromPhoton(latitude, longitude, radiusMeters) {
-  const target = new URL("https://photon.komoot.io/api/");
-  target.searchParams.set("q", "train station");
+  const target = new URL("https://photon.komoot.io/reverse");
   target.searchParams.set("lat", String(latitude));
   target.searchParams.set("lon", String(longitude));
-  target.searchParams.set("limit", "20");
-  target.searchParams.set("lang", "en");
-  target.searchParams.set("osm_tag", "railway:station");
+  target.searchParams.set("radius", String(Math.max(1, Math.ceil(radiusMeters / 1000))));
+  target.searchParams.append("osm_tag", "railway:station");
+  target.searchParams.append("osm_tag", "railway:halt");
   const response = await fetch(target.toString(), {
     headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
     signal: AbortSignal.timeout(8500)
   });
-  if (!response.ok) throw new Error("Photon rail search HTTP " + response.status);
+  if (!response.ok) throw new Error("Photon reverse rail lookup HTTP " + response.status);
   const payload = await response.json();
-  if (!Array.isArray(payload.features)) throw new Error("Photon rail search returned invalid GeoJSON");
-  const stations = payload.features.map(feature => {
+  const features = Array.isArray(payload.features) ? payload.features :
+    (payload.type === "Feature" ? [payload] : []);
+  const stations = features.map(feature => {
     const coordinates = feature.geometry?.coordinates || [];
     const lon = Number(coordinates[0]), lat = Number(coordinates[1]);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
@@ -1314,7 +1314,7 @@ async function findRailStationsFromPhoton(latitude, longitude, radiusMeters) {
     const distanceMeters = Math.round(haversineMeters(latitude, longitude, lat, lon));
     if (distanceMeters > radiusMeters) return null;
     return {
-      name: String(properties.name || properties.street || properties.city || "محطة قطار"),
+      name: String(properties.name || properties.street || "محطة قطار"),
       railway: String(properties.osm_value || "station"),
       latitude: lat,
       longitude: lon,
@@ -1322,7 +1322,7 @@ async function findRailStationsFromPhoton(latitude, longitude, radiusMeters) {
       stopId: properties.osm_id ? String(properties.osm_id) : ""
     };
   }).filter(Boolean).sort((a,b)=>a.distanceMeters-b.distanceMeters).slice(0,3);
-  if (!stations.length) throw new Error("Photon returned no rail stations in range");
+  if (!stations.length) throw new Error("Photon reverse returned no rail station in range");
   return stations;
 }
 
