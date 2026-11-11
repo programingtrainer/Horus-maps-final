@@ -118,8 +118,78 @@ async function getAuthenticatedUser(request, env) {
 
 const SEARCH_USER_AGENT = "HorusMaps/0.1 (Android map search; https://github.com/programingtrainer/Horus-maps-final)";
 
-async function findNearbyOpenAirports(latitude, longitude) {
-  const query = '[out:json][timeout:12];(nwr(around:300000,' + latitude + ',' + longitude + ')["aeroway"~"^(aerodrome|airport)$"]["iata"];);out center tags 100;';
+function parseCsvRecord(line) {
+  const fields = [];
+  let value = "", quoted = false;
+  for (let index = 0; index < line.length; index++) {
+    const character = line[index];
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') { value += '"'; index++; }
+      else quoted = !quoted;
+    } else if (character === "," && !quoted) {
+      fields.push(value); value = "";
+    } else value += character;
+  }
+  fields.push(value);
+  return fields;
+}
+
+async function findAirportsFromOurAirports(latitude, longitude, env) {
+  const cacheKey = "horus:airport-catalog:ourairports:v1";
+  let csv = "";
+  if (env.HORUS_MAPS_CONFIG) {
+    try { csv = await env.HORUS_MAPS_CONFIG.get(cacheKey) || ""; }
+    catch (error) { console.warn("[HorusFlights] Airport catalog cache read failed", String(error?.message || error).slice(0, 100)); }
+  }
+  if (!csv) {
+    const response = await fetch("https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airports.csv", {
+      headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "text/csv" },
+      signal: AbortSignal.timeout(18000)
+    });
+    if (!response.ok) throw new Error("OurAirports catalog HTTP " + response.status);
+    csv = await response.text();
+    if (!csv || csv.length < 1000) throw new Error("OurAirports catalog was empty or truncated");
+    if (env.HORUS_MAPS_CONFIG) {
+      try { await env.HORUS_MAPS_CONFIG.put(cacheKey, csv, { expirationTtl: 21600 }); }
+      catch (error) { console.warn("[HorusFlights] Airport catalog cache write failed", String(error?.message || error).slice(0, 100)); }
+    }
+  }
+
+  const lines = csv.split(/\\r?\\n/);
+  const headers = parseCsvRecord(lines.shift() || "");
+  const column = name => headers.indexOf(name);
+  const typeIndex = column("type"), iataIndex = column("iata_code");
+  const nameIndex = column("name"), latIndex = column("latitude_deg");
+  const lonIndex = column("longitude_deg"), scheduledIndex = column("scheduled_service");
+  if ([typeIndex, iataIndex, nameIndex, latIndex, lonIndex].some(index => index < 0)) {
+    throw new Error("OurAirports catalog schema is invalid");
+  }
+
+  const airports = [];
+  for (const line of lines) {
+    if (!line) continue;
+    const row = parseCsvRecord(line);
+    const iataCode = String(row[iataIndex] || "").trim().toUpperCase();
+    const type = String(row[typeIndex] || "");
+    if (!/^[A-Z]{3}$/.test(iataCode) ||
+        !["large_airport", "medium_airport", "small_airport"].includes(type) ||
+        (scheduledIndex >= 0 && String(row[scheduledIndex]).toLowerCase() !== "yes")) continue;
+    const airportLatitude = Number(row[latIndex]);
+    const airportLongitude = Number(row[lonIndex]);
+    if (!Number.isFinite(airportLatitude) || !Number.isFinite(airportLongitude)) continue;
+    airports.push({
+      iataCode,
+      name: String(row[nameIndex] || iataCode),
+      latitude: airportLatitude,
+      longitude: airportLongitude,
+      distanceMeters: Math.round(haversineMeters(latitude, longitude, airportLatitude, airportLongitude))
+    });
+  }
+  return airports.sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
+}
+
+async function findNearbyOpenAirports(latitude, longitude, env) {
+  const query = '[out:json][timeout:15];(nwr(around:500000,' + latitude + ',' + longitude + ')["aeroway"~"^(aerodrome|airport)$"]["iata"];);out center tags 150;';
   const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
     const response = await fetch(endpoint, {
       method: "POST",
@@ -129,18 +199,27 @@ async function findNearbyOpenAirports(latitude, longitude) {
         "Accept": "application/json"
       },
       body: "data=" + encodeURIComponent(query),
-      signal: AbortSignal.timeout(14000)
+      signal: AbortSignal.timeout(18000)
     });
     if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
     const payload = await response.json();
-    if (!Array.isArray(payload.elements)) throw new Error("Invalid airport data");
+    if (!Array.isArray(payload.elements)) throw new Error("Invalid airport data from " + new URL(endpoint).hostname);
     return payload.elements;
   });
   let elements;
   try {
     elements = await Promise.any(attempts);
   } catch (error) {
-    throw new Error("تعذر تحميل بيانات المطارات المفتوحة حاليًا.");
+    const failures = Array.isArray(error?.errors) ? error.errors : [];
+    console.warn("[HorusFlights] Overpass airport lookup failed", failures.map(item => String(item?.message || item).slice(0, 90)).join("; ").slice(0, 350));
+    try {
+      const fallback = await findAirportsFromOurAirports(latitude, longitude, env);
+      if (fallback.length) return fallback;
+      throw new Error("OurAirports found no scheduled airport within 500 km");
+    } catch (fallbackError) {
+      console.error("[HorusFlights] Airport fallback failed", String(fallbackError?.message || fallbackError).slice(0, 150));
+      throw new Error("تعذر الوصول إلى مصادر بيانات المطارات المفتوحة حاليًا.");
+    }
   }
   const seen = new Set();
   return elements.map(item => {
@@ -351,8 +430,10 @@ async function fetchTravelpayoutsPriceOffers(env, originIata, destinationIata, d
 
 const SEARCH_OVERPASS_ENDPOINTS = [
   "https://overpass.private.coffee/api/interpreter",
-  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-  "https://overpass-api.de/api/interpreter"
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.nchc.org.tw/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 ];
 
 function validCoordinate(value, min, max) {
@@ -1142,25 +1223,33 @@ async function queryOverpassCountry(countryCode, category, query) {
   }
 }
 
-async function findNearestRailStation(latitude, longitude, radiusMeters = 20000) {
-  const query = '[out:json][timeout:10];(' +
+async function findNearestRailStation(latitude, longitude, radiusMeters = 50000) {
+  const query = '[out:json][timeout:20];(' +
     'node(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
     'way(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
     'relation(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
-    ');out center tags 40;';
+    ');out center tags 80;';
   const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "User-Agent": SEARCH_USER_AGENT },
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
       body: "data=" + encodeURIComponent(query),
-      signal: AbortSignal.timeout(12000)
+      signal: AbortSignal.timeout(24000)
     });
-    if (!response.ok) throw new Error("Overpass station lookup HTTP " + response.status);
+    if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
     const payload = await response.json();
-    if (!Array.isArray(payload.elements)) throw new Error("Invalid Overpass station response");
+    if (!Array.isArray(payload.elements)) throw new Error("Invalid Overpass station response from " + new URL(endpoint).hostname);
     return payload.elements;
   });
-  const elements = await Promise.any(attempts);
+  let elements;
+  try {
+    elements = await Promise.any(attempts);
+  } catch (error) {
+    const failures = Array.isArray(error?.errors) ? error.errors : [];
+    const details = failures.map(item => String(item?.message || item).slice(0, 90)).join("; ");
+    console.warn("[HorusTransit] All Overpass station mirrors failed", details.slice(0, 350));
+    throw new Error(details || "All public Overpass station mirrors unavailable");
+  }
   return elements.map(item => {
     const latitudeValue = Number(item.lat ?? item.center?.lat);
     const longitudeValue = Number(item.lon ?? item.center?.lon);
@@ -1588,8 +1677,8 @@ export default {
             ok: true, provider: "OpenStreetMap + Transitous / MOTIS", available: false,
             stationDataAvailable: true,
             message: !originStations.length
-              ? "لم نعثر على محطة قطار مرسومة في OpenStreetMap ضمن 20 كم من موقعك."
-              : "لم نعثر على محطة قطار مرسومة ضمن 20 كم من الوجهة المحددة.",
+              ? "لم نعثر على محطة قطار مرسومة في OpenStreetMap ضمن 50 كم من موقعك."
+              : "لم نعثر على محطة قطار مرسومة ضمن 50 كم من الوجهة المحددة.",
             originStations, destinationStations, options: []
           });
         }
@@ -1770,8 +1859,8 @@ export default {
         ].join(":");
         return await cachedJson(env, cacheKey, ignavConfigured ? 1800 : 10800, async () => {
           const [origins, destinations] = await Promise.all([
-            findNearbyOpenAirports(originLat, originLon),
-            findNearbyOpenAirports(destinationLat, destinationLon)
+            findNearbyOpenAirports(originLat, originLon, env),
+            findNearbyOpenAirports(destinationLat, destinationLon, env)
           ]);
           if (!origins.length || !destinations.length) {
             return json({
