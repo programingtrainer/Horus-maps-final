@@ -1227,7 +1227,6 @@ async function findNearestRailStation(latitude, longitude, radiusMeters = 50000)
   const query = '[out:json][timeout:20];(' +
     'node(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
     'way(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
-    'relation(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
     ');out center tags 80;';
   const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
     const response = await fetch(endpoint, {
