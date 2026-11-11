@@ -86,8 +86,8 @@ jobs:
             method: "POST",
             headers: { "Content-Type": "application/json", "Accept": "application/json" },
             body: JSON.stringify({
-              originLatitude: 30.0626, originLongitude: 31.2469,
-              destinationLatitude: 31.2001, destinationLongitude: 29.9187,
+              originLatitude: 30.06323, originLongitude: 31.24694,
+              destinationLatitude: 31.21899, destinationLongitude: 29.94247,
               departureTime: new Date(Date.now() + 86400000).toISOString()
             }),
             signal: AbortSignal.timeout(65000)
