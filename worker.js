@@ -1223,6 +1223,37 @@ async function queryOverpassCountry(countryCode, category, query) {
   }
 }
 
+async function findNearestRailStationFromTransitous(latitude, longitude, radiusMeters) {
+  const latitudeDelta = radiusMeters / 111320;
+  const longitudeDelta = radiusMeters / (111320 * Math.max(0.2, Math.cos(latitude * Math.PI / 180)));
+  const target = new URL("https://api.transitous.org/api/v6/map/stops");
+  target.searchParams.set("min", (latitude - latitudeDelta) + "," + (longitude - longitudeDelta));
+  target.searchParams.set("max", (latitude + latitudeDelta) + "," + (longitude + longitudeDelta));
+  target.searchParams.set("modes", "RAIL");
+  target.searchParams.set("language", "ar,en");
+  const response = await fetch(target.toString(), {
+    headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+    signal: AbortSignal.timeout(18000)
+  });
+  if (!response.ok) throw new Error("Transitous map/stops HTTP " + response.status);
+  const payload = await response.json();
+  if (!Array.isArray(payload)) throw new Error("Transitous map/stops returned an invalid payload");
+  return payload.map(stop => {
+    const stopLatitude = Number(stop.lat);
+    const stopLongitude = Number(stop.lon);
+    if (!Number.isFinite(stopLatitude) || !Number.isFinite(stopLongitude)) return null;
+    return {
+      name: String(stop.name || stop.stopId || "محطة قطار"),
+      railway: "station",
+      latitude: stopLatitude,
+      longitude: stopLongitude,
+      distanceMeters: Math.round(haversineMeters(latitude, longitude, stopLatitude, stopLongitude)),
+      stopId: String(stop.stopId || "")
+    };
+  }).filter(stop => stop && stop.distanceMeters <= radiusMeters)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
+}
+
 async function findNearestRailStation(latitude, longitude, radiusMeters = 50000) {
   const query = '[out:json][timeout:20];(' +
     'node(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
@@ -1247,7 +1278,18 @@ async function findNearestRailStation(latitude, longitude, radiusMeters = 50000)
     const failures = Array.isArray(error?.errors) ? error.errors : [];
     const details = failures.map(item => String(item?.message || item).slice(0, 90)).join("; ");
     console.warn("[HorusTransit] All Overpass station mirrors failed", details.slice(0, 350));
-    throw new Error(details || "All public Overpass station mirrors unavailable");
+    try {
+      const fallbackStations = await findNearestRailStationFromTransitous(latitude, longitude, radiusMeters);
+      if (fallbackStations.length) {
+        console.warn("[HorusTransit] Station discovery recovered through Transitous map/stops");
+        return fallbackStations;
+      }
+      throw new Error("Transitous map/stops returned no rail stations in the requested radius");
+    } catch (fallbackError) {
+      const fallbackDetails = String(fallbackError?.message || fallbackError).slice(0, 160);
+      console.warn("[HorusTransit] Transitous station fallback failed", fallbackDetails);
+      throw new Error([details, fallbackDetails].filter(Boolean).join("; ").slice(0, 500) || "All open station sources unavailable");
+    }
   }
   return elements.map(item => {
     const latitudeValue = Number(item.lat ?? item.center?.lat);
