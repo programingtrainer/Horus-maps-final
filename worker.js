@@ -1291,56 +1291,87 @@ async function findNearestRailStationFromTransitous(latitude, longitude, radiusM
     .sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
 }
 
-async function findNearestRailStationUncached(latitude, longitude, radiusMeters = 50000) {
-  const query = '[out:json][timeout:20];(' +
-    'node(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
-    'way(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
-    ');out center tags 80;';
-  const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
-      body: "data=" + encodeURIComponent(query),
-      signal: AbortSignal.timeout(10000)
-    });
-    if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
-    const payload = await response.json();
-    if (!Array.isArray(payload.elements)) throw new Error("Invalid Overpass station response from " + new URL(endpoint).hostname);
-    return payload.elements;
+async function findRailStationsFromPhoton(latitude, longitude, radiusMeters) {
+  const target = new URL("https://photon.komoot.io/api/");
+  target.searchParams.set("q", "train station");
+  target.searchParams.set("lat", String(latitude));
+  target.searchParams.set("lon", String(longitude));
+  target.searchParams.set("limit", "20");
+  target.searchParams.set("lang", "en");
+  target.searchParams.set("osm_tag", "railway:station");
+  const response = await fetch(target.toString(), {
+    headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/geo+json, application/json" },
+    signal: AbortSignal.timeout(8500)
   });
-  let elements;
+  if (!response.ok) throw new Error("Photon rail search HTTP " + response.status);
+  const payload = await response.json();
+  if (!Array.isArray(payload.features)) throw new Error("Photon rail search returned invalid GeoJSON");
+  const stations = payload.features.map(feature => {
+    const coordinates = feature.geometry?.coordinates || [];
+    const lon = Number(coordinates[0]), lat = Number(coordinates[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const properties = feature.properties || {};
+    const distanceMeters = Math.round(haversineMeters(latitude, longitude, lat, lon));
+    if (distanceMeters > radiusMeters) return null;
+    return {
+      name: String(properties.name || properties.street || properties.city || "محطة قطار"),
+      railway: String(properties.osm_value || "station"),
+      latitude: lat,
+      longitude: lon,
+      distanceMeters,
+      stopId: properties.osm_id ? String(properties.osm_id) : ""
+    };
+  }).filter(Boolean).sort((a,b)=>a.distanceMeters-b.distanceMeters).slice(0,3);
+  if (!stations.length) throw new Error("Photon returned no rail stations in range");
+  return stations;
+}
+
+async function findNearestRailStationUncached(latitude, longitude, radiusMeters = 50000) {
+  const attempts = [
+    findNearestRailStationFromTransitous(latitude, longitude, radiusMeters),
+    findRailStationsFromPhoton(latitude, longitude, radiusMeters)
+  ];
+  const query = '[out:json][timeout:8];(' +
+    'node(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')[\"railway\"~\"^(station|halt)$\"];' +
+    'way(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')[\"railway\"~\"^(station|halt)$\"];' +
+    ');out center tags 80;';
+  for (const endpoint of SEARCH_OVERPASS_ENDPOINTS) {
+    attempts.push((async () => {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
+        body: "data=" + encodeURIComponent(query),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
+      const payload = await response.json();
+      if (!Array.isArray(payload.elements)) throw new Error("Invalid Overpass station response from " + new URL(endpoint).hostname);
+      const stations = payload.elements.map(item => {
+        const lat = Number(item.lat ?? item.center?.lat), lon = Number(item.lon ?? item.center?.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+        const tags = item.tags || {};
+        return {
+          name: String(tags.name || tags["name:en"] || tags["name:ar"] || "محطة قطار"),
+          railway: String(tags.railway || "station"),
+          latitude: lat,
+          longitude: lon,
+          distanceMeters: Math.round(haversineMeters(latitude, longitude, lat, lon))
+        };
+      }).filter(Boolean).sort((a,b)=>a.distanceMeters-b.distanceMeters).slice(0,3);
+      if (!stations.length) throw new Error("No mapped rail stations from " + new URL(endpoint).hostname);
+      return stations;
+    })());
+  }
   try {
-    elements = await Promise.any(attempts);
+    const stations = await Promise.any(attempts);
+    console.info("[HorusTransit] Rail stations found from a responsive open source");
+    return stations;
   } catch (error) {
     const failures = Array.isArray(error?.errors) ? error.errors : [];
-    const details = failures.map(item => String(item?.message || item).slice(0, 90)).join("; ");
-    console.warn("[HorusTransit] All Overpass station mirrors failed", details.slice(0, 350));
-    try {
-      const fallbackStations = await findNearestRailStationFromTransitous(latitude, longitude, radiusMeters);
-      if (fallbackStations.length) {
-        console.warn("[HorusTransit] Station discovery recovered through Transitous map/stops");
-        return fallbackStations;
-      }
-      throw new Error("Transitous map/stops returned no rail stations in the requested radius");
-    } catch (fallbackError) {
-      const fallbackDetails = String(fallbackError?.message || fallbackError).slice(0, 160);
-      console.warn("[HorusTransit] Transitous station fallback failed", fallbackDetails);
-      throw new Error([details, fallbackDetails].filter(Boolean).join("; ").slice(0, 500) || "All open station sources unavailable");
-    }
+    const details = failures.map(item => String(item?.message || item).slice(0, 100)).join("; ");
+    console.warn("[HorusTransit] All open rail sources failed", details.slice(0, 400));
+    throw new Error(details || "All open station sources unavailable");
   }
-  return elements.map(item => {
-    const latitudeValue = Number(item.lat ?? item.center?.lat);
-    const longitudeValue = Number(item.lon ?? item.center?.lon);
-    if (!Number.isFinite(latitudeValue) || !Number.isFinite(longitudeValue)) return null;
-    const tags = item.tags || {};
-    return {
-      name: String(tags.name || tags["name:en"] || tags["name:ar"] || (tags.railway === "halt" ? "موقف قطار" : "محطة قطار")),
-      railway: String(tags.railway || "station"),
-      latitude: latitudeValue,
-      longitude: longitudeValue,
-      distanceMeters: Math.round(haversineMeters(latitude, longitude, latitudeValue, longitudeValue))
-    };
-  }).filter(Boolean).sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
 }
 
 async function queryOverpass(lat, lon, countryCode, category, query, radius) {
