@@ -96,7 +96,7 @@ jobs:
           if (!transitResponse.ok || !transit.ok || transit.stationDataAvailable !== true ||
               !Array.isArray(transit.originStations) || transit.originStations.length === 0 ||
               !Array.isArray(transit.destinationStations) || transit.destinationStations.length === 0) {
-            throw new Error("Rail station discovery integration test failed: HTTP " + transitResponse.status + ", error=" + (transit.error || transit.message || "missing stations"));
+            throw new Error("Rail station discovery integration test failed: HTTP " + transitResponse.status + ", error=" + (transit.error || transit.message || transit.diagnostic || "missing stations"));
           }
 
           const bookingValidationResponse = await fetch(base + "/v1/search/flights/booking-links", {
