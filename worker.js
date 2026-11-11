@@ -188,7 +188,7 @@ async function findAirportsFromOurAirports(latitude, longitude, env) {
   return airports.sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
 }
 
-async function findNearbyOpenAirports(latitude, longitude, env) {
+async function findNearbyOpenAirportsUncached(latitude, longitude, env) {
   const query = '[out:json][timeout:15];(nwr(around:500000,' + latitude + ',' + longitude + ')["aeroway"~"^(aerodrome|airport)$"]["iata"];);out center tags 150;';
   const attempts = SEARCH_OVERPASS_ENDPOINTS.map(async endpoint => {
     const response = await fetch(endpoint, {
@@ -239,6 +239,24 @@ async function findNearbyOpenAirports(latitude, longitude, env) {
       distanceMeters: Math.round(haversineMeters(latitude, longitude, latitudeValue, longitudeValue))
     };
   }).filter(Boolean).sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
+}
+
+async function findNearbyOpenAirports(latitude, longitude, env) {
+  const key = "horus:airport-nearby:v2:" + latitude.toFixed(2) + ":" + longitude.toFixed(2);
+  if (env.HORUS_MAPS_CONFIG) {
+    try {
+      const cached = await env.HORUS_MAPS_CONFIG.get(key);
+      if (cached) return JSON.parse(cached);
+    } catch (error) {
+      console.warn("[HorusFlights] Nearby airport cache read failed", String(error?.message || error).slice(0, 100));
+    }
+  }
+  const airports = await findNearbyOpenAirportsUncached(latitude, longitude, env);
+  if (env.HORUS_MAPS_CONFIG && airports.length) {
+    try { await env.HORUS_MAPS_CONFIG.put(key, JSON.stringify(airports), { expirationTtl: 43200 }); }
+    catch (error) { console.warn("[HorusFlights] Nearby airport cache write failed", String(error?.message || error).slice(0, 100)); }
+  }
+  return airports;
 }
 
 function normalizeOagFlight(flight, originAirport, destinationAirport) {
@@ -882,6 +900,25 @@ async function resolvePlaceScope(query, nearLat, nearLon) {
   }
 }
 
+async function findNearestRailStation(latitude, longitude, radiusMeters = 50000, env) {
+  const key = "horus:rail-nearby:v2:" + latitude.toFixed(2) + ":" + longitude.toFixed(2) + ":" + radiusMeters;
+  if (env?.HORUS_MAPS_CONFIG) {
+    try {
+      const cached = await env.HORUS_MAPS_CONFIG.get(key);
+      if (cached) return JSON.parse(cached);
+    } catch (error) {
+      console.warn("[HorusTransit] Rail cache read failed", String(error?.message || error).slice(0, 100));
+    }
+  }
+  const stations = await findNearestRailStationUncached(latitude, longitude, radiusMeters);
+  if (env?.HORUS_MAPS_CONFIG && stations.length) {
+    try { await env.HORUS_MAPS_CONFIG.put(key, JSON.stringify(stations), { expirationTtl: 21600 }); }
+    catch (error) { console.warn("[HorusTransit] Rail cache write failed", String(error?.message || error).slice(0, 100)); }
+  }
+  return stations;
+}
+
+
 async function queryOverpassPlaceScope(scope, category) {
   const isRelationArea = scope.osmType === "relation" && /^\d+$/.test(scope.osmId) && scope.category === "boundary";
   let selectors;
@@ -1233,7 +1270,7 @@ async function findNearestRailStationFromTransitous(latitude, longitude, radiusM
   target.searchParams.set("language", "ar,en");
   const response = await fetch(target.toString(), {
     headers: { "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
-    signal: AbortSignal.timeout(18000)
+    signal: AbortSignal.timeout(8500)
   });
   if (!response.ok) throw new Error("Transitous map/stops HTTP " + response.status);
   const payload = await response.json();
@@ -1254,7 +1291,7 @@ async function findNearestRailStationFromTransitous(latitude, longitude, radiusM
     .sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 3);
 }
 
-async function findNearestRailStation(latitude, longitude, radiusMeters = 50000) {
+async function findNearestRailStationUncached(latitude, longitude, radiusMeters = 50000) {
   const query = '[out:json][timeout:20];(' +
     'node(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
     'way(around:' + radiusMeters + ',' + latitude + ',' + longitude + ')["railway"~"^(station|halt)$"];' +
@@ -1264,7 +1301,7 @@ async function findNearestRailStation(latitude, longitude, radiusMeters = 50000)
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "User-Agent": SEARCH_USER_AGENT, "Accept": "application/json" },
       body: "data=" + encodeURIComponent(query),
-      signal: AbortSignal.timeout(24000)
+      signal: AbortSignal.timeout(10000)
     });
     if (!response.ok) throw new Error(new URL(endpoint).hostname + " HTTP " + response.status);
     const payload = await response.json();
@@ -1701,8 +1738,8 @@ export default {
         let originStations = [], destinationStations = [];
         try {
           [originStations, destinationStations] = await Promise.all([
-            findNearestRailStation(originLat, originLon),
-            findNearestRailStation(destinationLat, destinationLon)
+            findNearestRailStation(originLat, originLon, 50000, env),
+            findNearestRailStation(destinationLat, destinationLon, 50000, env)
           ]);
         } catch (stationError) {
           console.warn("[HorusTransit] Station discovery unavailable", String(stationError?.message || stationError).slice(0, 120));
