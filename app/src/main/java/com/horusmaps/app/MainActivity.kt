@@ -1,6 +1,11 @@
 package com.horusmaps.app
 
 import android.Manifest
+import android.app.DatePickerDialog
+import android.animation.ValueAnimator
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
@@ -26,6 +31,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,18 +78,31 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.annotations.IconFactory
+import org.maplibre.android.annotations.Marker
+import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.annotations.Polyline
+import org.maplibre.android.annotations.PolylineOptions
+import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.maps.Style
 import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
+import java.util.Locale
+import java.util.Calendar
 
 
 /**
@@ -333,7 +352,308 @@ private fun installMapAppearance(context: android.content.Context, style: Style,
     }
 }
 
+private data class HorusNavigationProgress(
+    val remainingMeters: Int,
+    val remainingSeconds: Int,
+    val traveledMeters: Int
+)
+private data class HorusNavigationManeuverState(
+    val current: HorusRouteStep,
+    val next: HorusRouteStep?,
+    val distanceToCurrentMeters: Int
+)
+private fun selectNavigationManeuver(route: HorusRouteResult, progress: HorusNavigationProgress): HorusNavigationManeuverState? {
+    val maneuvers = route.steps.filterNot { it.type == "depart" || it.type == "arrive" }
+    if (maneuvers.isEmpty()) return null
+    val index = maneuvers.indexOfFirst { it.distanceFromStartMeters >= progress.traveledMeters - 20 }
+        .let { if (it < 0) maneuvers.lastIndex else it }
+    val current = maneuvers[index]
+    return HorusNavigationManeuverState(current, maneuvers.getOrNull(index + 1),
+        (current.distanceFromStartMeters - progress.traveledMeters).coerceAtLeast(0))
+}
+
+private fun calculateRouteProgress(
+    routePoints: List<LatLng>,
+    currentLocation: Location,
+    route: HorusRouteResult
+): HorusNavigationProgress? {
+    if (routePoints.size < 2) return null
+
+    val latitudeScale = 110540.0
+    val longitudeScale = 111320.0 * kotlin.math.cos(Math.toRadians(currentLocation.latitude)).coerceAtLeast(0.01)
+    var traversedMeters = 0.0
+    var bestDistanceSquared = Double.POSITIVE_INFINITY
+    var bestAlongRoute = 0.0
+
+    for (index in 0 until routePoints.lastIndex) {
+        val start = routePoints[index]
+        val end = routePoints[index + 1]
+        val ax = (start.longitude - currentLocation.longitude) * longitudeScale
+        val ay = (start.latitude - currentLocation.latitude) * latitudeScale
+        val bx = (end.longitude - currentLocation.longitude) * longitudeScale
+        val by = (end.latitude - currentLocation.latitude) * latitudeScale
+        val dx = bx - ax
+        val dy = by - ay
+        val segmentLengthSquared = dx * dx + dy * dy
+        val fraction = if (segmentLengthSquared <= 0.0001) 0.0 else
+            ((-(ax * dx + ay * dy)) / segmentLengthSquared).coerceIn(0.0, 1.0)
+        val nearestX = ax + fraction * dx
+        val nearestY = ay + fraction * dy
+        val distanceSquared = nearestX * nearestX + nearestY * nearestY
+        val segmentLength = FloatArray(1).also { output ->
+            Location.distanceBetween(start.latitude, start.longitude, end.latitude, end.longitude, output)
+        }[0].toDouble()
+
+        if (distanceSquared < bestDistanceSquared) {
+            bestDistanceSquared = distanceSquared
+            bestAlongRoute = traversedMeters + segmentLength * fraction
+        }
+        traversedMeters += segmentLength
+    }
+
+    if (traversedMeters <= 0.0) return null
+    val remainingRatio = (1.0 - bestAlongRoute / traversedMeters).coerceIn(0.0, 1.0)
+    return HorusNavigationProgress(
+        remainingMeters = (route.distanceMeters * remainingRatio).toInt().coerceAtLeast(0),
+        remainingSeconds = (route.durationSeconds * remainingRatio).toInt().coerceAtLeast(0),
+        traveledMeters = (route.distanceMeters * (1.0 - remainingRatio)).toInt().coerceAtLeast(0)
+    )
+}
+
 class MainActivity : ComponentActivity() {
+    private val searchBoundaryHandler = Handler(Looper.getMainLooper())
+    private var searchBoundaryAnimator: ValueAnimator? = null
+    private var searchBoundaryClearRunnable: Runnable? = null
+    private var searchBoundaryFinishRunnable: Runnable? = null
+    private var searchMarkerClearRunnable: Runnable? = null
+    private var searchMarkerFadeAnimator: ValueAnimator? = null
+    private var searchMarker: Marker? = null
+    private var placeFeatureClickListener: org.maplibre.android.maps.MapLibreMap.OnMapClickListener? = null
+
+    private fun installPlaceFeatureClickListener(
+        map: org.maplibre.android.maps.MapLibreMap,
+        onPlaceSelected: (HorusNavigationDestination) -> Unit
+    ) {
+        placeFeatureClickListener?.let { old ->
+            runCatching { map.removeOnMapClickListener(old) }
+        }
+        val listener = org.maplibre.android.maps.MapLibreMap.OnMapClickListener { tappedPoint ->
+            val features: List<org.maplibre.geojson.Feature> = runCatching {
+                map.queryRenderedFeatures(map.projection.toScreenLocation(tappedPoint))
+            }.getOrDefault(emptyList())
+            val selected: HorusNavigationDestination? = features.firstNotNullOfOrNull { feature ->
+                val properties = feature.properties() ?: return@firstNotNullOfOrNull null
+                fun value(key: String): String =
+                    runCatching { feature.getStringProperty(key)?.trim().orEmpty().lowercase(Locale.ROOT) }
+                        .getOrDefault("")
+                val values = listOf(
+                    "amenity", "shop", "healthcare", "railway", "public_transport",
+                    "highway", "leisure", "tourism", "office", "craft", "aeroway",
+                    "place", "class", "subclass", "type", "kind", "religion"
+                ).associateWith(::value)
+                val tags = values.values.filter(String::isNotBlank).toSet()
+                val categoryName = when {
+                    tags.any { it in setOf("place_of_worship", "mosque", "masjid", "religious_muslim") } ||
+                        (value("religion") == "muslim" && value("amenity") == "place_of_worship") -> "مسجد"
+                    tags.any { it in setOf("hospital", "clinic", "healthcare") } -> "منشأة طبية"
+                    tags.any { it in setOf("pharmacy", "chemist") } -> "صيدلية"
+                    tags.any { it in setOf("supermarket", "grocery", "convenience", "department_store") } -> "متجر"
+                    tags.any { it in setOf("restaurant", "fast_food", "cafe") } -> "مطعم"
+                    tags.any { it in setOf("fuel", "gas_station") } -> "محطة وقود"
+                    tags.any { it in setOf("rail", "railway", "station", "subway", "tram", "light_rail") } -> "محطة قطار"
+                    tags.any { it in setOf("airport", "aerodrome") } -> "مطار"
+                    tags.any { it in setOf("bus", "bus_stop", "bus_station") } -> "محطة حافلات"
+                    else -> null
+                } ?: return@firstNotNullOfOrNull null
+                val name = listOf("name", "name:ar", "name_ar", "name:en", "name_en", "name_int")
+                    .firstNotNullOfOrNull { key ->
+                        runCatching { feature.getStringProperty(key)?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
+                    } ?: categoryName
+                val address = listOf("addr:street", "addr:suburb", "addr:city", "addr:state", "addr:country")
+                    .mapNotNull { key ->
+                        runCatching { feature.getStringProperty(key)?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
+                    }.distinct().joinToString("، ")
+                HorusNavigationDestination(
+                    name = name,
+                    address = address,
+                    latitude = tappedPoint.latitude,
+                    longitude = tappedPoint.longitude
+                )
+            }
+            if (selected == null) {
+                false
+            } else {
+                showSearchMarker(map, tappedPoint.latitude, tappedPoint.longitude, selected.name)
+                onPlaceSelected(selected)
+                true
+            }
+        }
+        placeFeatureClickListener = listener
+        map.addOnMapClickListener(listener)
+    }
+
+    private fun bestKnownLocation(map: org.maplibre.android.maps.MapLibreMap): Location? {
+        val componentLocation = runCatching {
+            if (map.locationComponent.isLocationComponentActivated) map.locationComponent.lastKnownLocation else null
+        }.getOrNull()
+        if (componentLocation != null) return componentLocation
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) return null
+        val manager = getSystemService(LOCATION_SERVICE) as LocationManager
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+        return providers.mapNotNull { runCatching { manager.getLastKnownLocation(it) }.getOrNull() }
+            .filter { System.currentTimeMillis() - it.time < 2 * 60 * 60 * 1000L }
+            .maxByOrNull { it.time }
+    }
+
+    private fun showSearchMarker(map: org.maplibre.android.maps.MapLibreMap, latitude: Double, longitude: Double, title: String) {
+        searchMarkerClearRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        searchMarkerClearRunnable = null
+        searchMarkerFadeAnimator?.cancel()
+        runCatching { searchMarker?.let { map.removeAnnotation(it) } }
+
+        val marker = runCatching {
+            map.addMarker(MarkerOptions().position(LatLng(latitude, longitude)).title(title))
+        }.getOrNull()
+        searchMarker = marker ?: return
+
+        // Keep the marker fully visible for 8.5 seconds, then fade it out
+        // smoothly during the final 1.5 seconds of its 10-second lifetime.
+        val clearAfterFade = Runnable {
+            val activeMarker = marker
+            val originalBitmap = runCatching { activeMarker.icon?.bitmap }.getOrNull()
+            if (originalBitmap == null) {
+                runCatching { map.removeAnnotation(activeMarker) }
+                if (searchMarker === activeMarker) searchMarker = null
+                return@Runnable
+            }
+            searchMarkerFadeAnimator?.cancel()
+            searchMarkerFadeAnimator = ValueAnimator.ofInt(255, 0).apply {
+                duration = 1500L
+                addUpdateListener { animation ->
+                    val alpha = animation.animatedValue as Int
+                    runCatching {
+                        val fadedBitmap = Bitmap.createBitmap(
+                            originalBitmap.width,
+                            originalBitmap.height,
+                            Bitmap.Config.ARGB_8888
+                        )
+                        Canvas(fadedBitmap).drawBitmap(
+                            originalBitmap,
+                            0f,
+                            0f,
+                            Paint(Paint.ANTI_ALIAS_FLAG).apply { this.alpha = alpha }
+                        )
+                        activeMarker.icon = IconFactory.getInstance(this@MainActivity).fromBitmap(fadedBitmap)
+                    }
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        runCatching { map.removeAnnotation(activeMarker) }
+                        if (searchMarker === activeMarker) searchMarker = null
+                        searchMarkerFadeAnimator = null
+                        searchMarkerClearRunnable = null
+                    }
+                })
+                start()
+            }
+        }
+        searchMarkerClearRunnable = clearAfterFade
+        searchBoundaryHandler.postDelayed(clearAfterFade, 8500L)
+    }
+
+    private fun showSearchBoundary(map: org.maplibre.android.maps.MapLibreMap, featureGeoJson: String) {
+        searchBoundaryAnimator?.cancel()
+        searchBoundaryClearRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        searchBoundaryFinishRunnable?.let(searchBoundaryHandler::removeCallbacks)
+        searchBoundaryClearRunnable = null
+        searchBoundaryFinishRunnable = null
+        map.getStyle { style ->
+            val source = (style.getSource("horus-search-boundary") as? GeoJsonSource)
+                ?: GeoJsonSource("horus-search-boundary", featureGeoJson).also { style.addSource(it) }
+            source.setGeoJson(featureGeoJson)
+            val layer = (style.getLayer("horus-search-boundary-line") as? LineLayer)
+                ?: LineLayer("horus-search-boundary-line", "horus-search-boundary").apply {
+                    setProperties(PropertyFactory.lineColor("#F02035"), PropertyFactory.lineWidth(3.2f), PropertyFactory.lineOpacity(1.0f))
+                }.also { style.addLayer(it) }
+            layer.setProperties(PropertyFactory.lineColor("#F02035"), PropertyFactory.lineWidth(3.2f), PropertyFactory.lineOpacity(1.0f))
+            val clear = Runnable {
+                searchBoundaryAnimator = ValueAnimator.ofFloat(1.0f, 0.0f).apply {
+                    duration = 1500L
+                    addUpdateListener { animation ->
+                        runCatching { layer.setProperties(PropertyFactory.lineOpacity(animation.animatedValue as Float)) }
+                    }
+                    start()
+                }
+                val finishFade = Runnable {
+                    runCatching { source.setGeoJson("""{"type":"FeatureCollection","features":[]}""") }
+                    searchBoundaryFinishRunnable = null
+                }
+                searchBoundaryFinishRunnable = finishFade
+                searchBoundaryHandler.postDelayed(finishFade, 1550L)
+            }
+            searchBoundaryClearRunnable = clear
+            searchBoundaryHandler.postDelayed(clear, 8500L)
+        }
+    }
+
+    private fun focusSearchResult(map: org.maplibre.android.maps.MapLibreMap, result: HorusGeoSearchResult) {
+        val bounds = result.bounds
+        if (bounds != null) {
+            val crossesAntimeridian = bounds.west > bounds.east
+            if (crossesAntimeridian) {
+                // LatLngBounds.Builder treats west/east as an ordinary numeric
+                // range. For a polygon crossing +/-180°, that can produce a
+                // nearly-worldwide box whose apparent center is around Africa.
+                // The search API now supplies the center of the shortest
+                // longitude arc, so use it directly for this camera transition.
+                val longitudeSpan = (180.0 - bounds.west) + (bounds.east + 180.0)
+                val latitudeSpan = bounds.north - bounds.south
+                val extent = maxOf(longitudeSpan, latitudeSpan)
+                val zoom = when {
+                    extent > 150.0 -> 2.2
+                    extent > 110.0 -> 2.7
+                    extent > 75.0 -> 3.3
+                    extent > 45.0 -> 4.0
+                    extent > 25.0 -> 4.8
+                    extent > 12.0 -> 5.8
+                    else -> 6.8
+                }
+                map.animateCamera(
+                    CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), zoom),
+                    1050
+                )
+            } else {
+                runCatching {
+                    val fitBounds = LatLngBounds.Builder()
+                        .include(LatLng(bounds.north, bounds.west))
+                        .include(LatLng(bounds.south, bounds.east))
+                        .build()
+                    map.animateCamera(CameraUpdateFactory.newLatLngBounds(fitBounds, (112 * resources.displayMetrics.density).toInt()), 1050)
+                }.onFailure {
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 7.0), 900)
+                }
+            }
+        } else {
+            val kind = result.kind.lowercase()
+            val zoom = when {
+                kind in setOf(
+                    "village", "hamlet", "suburb", "neighbourhood", "quarter", "locality",
+                    "isolated_dwelling", "residential", "primary", "secondary", "tertiary",
+                    "unclassified", "service", "pedestrian", "living_street", "road"
+                ) -> 15.0
+                kind in setOf("city", "town") -> 12.5
+                kind in setOf("state", "county", "province", "administrative") -> 7.5
+                else -> 12.0
+            }
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), zoom), 900)
+        }
+        showSearchMarker(map, result.latitude, result.longitude, result.name)
+        showSearchBoundary(map, result.geometryGeoJson)
+    }
+
     private fun enableBlueLocationDot(map: org.maplibre.android.maps.MapLibreMap, style: Style) {
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -429,6 +749,45 @@ class MainActivity : ComponentActivity() {
                 var showLogin by remember { mutableStateOf(false) }
                 var showProfile by remember { mutableStateOf(false) }
                 var profileImageUri by remember { mutableStateOf(accountPrefs.getString("profile_image_uri", null)) }
+                var searchQuery by remember { mutableStateOf("") }
+                var activeSearchJob by remember { mutableStateOf<Job?>(null) }
+                var searchGeneration by remember { mutableStateOf(0) }
+                var searchExpanded by remember { mutableStateOf(false) }
+                var searchLoading by remember { mutableStateOf(false) }
+                var searchHasRun by remember { mutableStateOf(false) }
+                var searchError by remember { mutableStateOf<String?>(null) }
+                var selectedSearchCategory by remember { mutableStateOf<HorusSearchCategory?>(null) }
+                var geographySearchResults by remember { mutableStateOf<List<HorusGeoSearchResult>>(emptyList()) }
+                var nearbySearchResults by remember { mutableStateOf<List<HorusNearbyPlace>>(emptyList()) }
+                var navigationDestination by remember { mutableStateOf<HorusNavigationDestination?>(null) }
+                var intercityFinalDestination by remember { mutableStateOf<HorusNavigationDestination?>(null) }
+                var intercityArrivalStation by remember { mutableStateOf<HorusTransitStation?>(null) }
+                var intercityArrivalAirport by remember { mutableStateOf<HorusAirport?>(null) }
+                var intercityStage by remember { mutableStateOf("none") }
+                var intercityItineraryLines by remember { mutableStateOf<List<String>>(emptyList()) }
+                var intercityItineraryMessage by remember { mutableStateOf<String?>(null) }
+                var flightItineraryLines by remember { mutableStateOf<List<String>>(emptyList()) }
+                var flightItineraryMessage by remember { mutableStateOf<String?>(null) }
+                var selectedTravelMode by remember { mutableStateOf("driving") }
+                var calculatedRoute by remember { mutableStateOf<HorusRouteResult?>(null) }
+                var routeCoordinates by remember { mutableStateOf<List<LatLng>>(emptyList()) }
+                var navigationProgress by remember { mutableStateOf<HorusNavigationProgress?>(null) }
+                var navigationManeuver by remember { mutableStateOf<HorusNavigationManeuverState?>(null) }
+                var routePolyline by remember { mutableStateOf<Polyline?>(null) }
+                var routeLoading by remember { mutableStateOf(false) }
+                var navigationStarted by remember { mutableStateOf(false) }
+                var navigationError by remember { mutableStateOf<String?>(null) }
+                var transportLoading by remember { mutableStateOf(false) }
+                var transportSearchJob by remember { mutableStateOf<Job?>(null) }
+                var transportSearchResult by remember { mutableStateOf<HorusTransportSearchResult?>(null) }
+                var transportSearchError by remember { mutableStateOf<String?>(null) }
+                var bookingLoadingId by remember { mutableStateOf<String?>(null) }
+                var travelDate by remember {
+                    mutableStateOf(java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().apply { add(Calendar.DAY_OF_MONTH, 1) }.time))
+                }
+                var travelTime by remember {
+                    mutableStateOf(java.text.SimpleDateFormat("HH:mm", Locale.US).format(Calendar.getInstance().apply { add(Calendar.MINUTE, 30) }.time))
+                }
 
                 fun activateAccount(
                     email: String,
@@ -745,6 +1104,532 @@ class MainActivity : ComponentActivity() {
                     if (fine || coarse) mapLibreMap?.let { centerOnCurrentLocation(it) }
                     else locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                 }
+
+                fun runMapSearch() {
+                    activeSearchJob?.cancel()
+                    searchGeneration += 1
+                    val requestGeneration = searchGeneration
+                    val rawQuery = searchQuery.trim()
+                    val category = selectedSearchCategory ?: HorusSearchCategory.detect(rawQuery)
+                    if (rawQuery.length < 2 && category == null) {
+                        searchError = "اكتب اسم دولة أو قارة أو مكان للبحث."
+                        searchExpanded = true
+                        return
+                    }
+                    val map = mapLibreMap
+                    if (map == null) {
+                        searchError = "الخريطة ما زالت تُحمّل. حاول بعد لحظات."
+                        return
+                    }
+                    selectedSearchCategory = category
+                    searchLoading = true
+                    searchHasRun = true
+                    searchError = null
+                    geographySearchResults = emptyList()
+                    nearbySearchResults = emptyList()
+                    searchExpanded = true
+                    activeSearchJob = accountScope.launch {
+                        try {
+                            if (category != null) {
+                                val location = bestKnownLocation(map)
+                                if (location == null) {
+                                    val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                    val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                    if (!fine && !coarse) {
+                                        searchError = "للعثور على أقرب فرع داخل دولتك، اسمح لـ HorusMaps باستخدام موقعك."
+                                        locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                                    } else {
+                                        searchError = "لم نتمكن من تحديد موقعك الحالي. تأكد من تشغيل GPS ثم انتظر لحظات وحاول مجددًا."
+                                        centerOnCurrentLocation(map)
+                                    }
+                                    return@launch
+                                }
+                                val country = HorusMapSearchApi.reverseCountry(location.latitude, location.longitude)
+                                val branchQuery = HorusSearchCategory.queryFor(rawQuery, category)
+                                val results = HorusMapSearchApi.nearbyPlaces(branchQuery, category, location.latitude, location.longitude, country.code, rawQuery)
+                                nearbySearchResults = results
+                                if (results.isEmpty()) {
+                                    searchError = "لم نعثر على نتائج مطابقة داخل " + country.name.ifBlank { "دولتك" } + " ضمن نطاق البحث."
+                                }
+                            } else {
+                                val target = map.cameraPosition.target
+                                val localContinent = HorusMapSearchApi.localContinent(this@MainActivity, rawQuery)
+                                val results = if (localContinent != null) listOf(localContinent)
+                                    else HorusMapSearchApi.geocode(rawQuery, target?.latitude, target?.longitude)
+                                geographySearchResults = results
+                                if (results.isEmpty()) searchError = "لم نعثر على مكان مطابق. جرّب كتابة الاسم بطريقة أخرى."
+                            }
+                        } catch (cancelled: CancellationException) {
+                            // A query change, a newer request, or closing the panel can
+                            // legitimately cancel this request. Never show cancellation
+                            // as a user-facing search failure.
+                            throw cancelled
+                        } catch (error: Exception) {
+                            if (requestGeneration == searchGeneration) {
+                                searchError = error.message?.takeIf { it.isNotBlank() }
+                                    ?: "حدث خطأ أثناء البحث. تحقق من اتصال الإنترنت وحاول مرة أخرى."
+                            }
+                        } finally {
+                            if (requestGeneration == searchGeneration) {
+                                searchLoading = false
+                                activeSearchJob = null
+                            }
+                        }
+                    }
+                }
+
+                LaunchedEffect(searchQuery, searchExpanded, searchHasRun) {
+                    // Debounce only schedules a search. It must not cancel a request
+                    // already started by the search button or keyboard action.
+                    // Including searchHasRun as a key cancels the pending debounce as
+                    // soon as a manual search begins.
+                    val typedQuery = searchQuery.trim()
+                    if (searchExpanded && typedQuery.length >= 2 && !searchHasRun) {
+                        delay(1000L)
+                        if (typedQuery == searchQuery.trim() && !searchHasRun) {
+                            runMapSearch()
+                        }
+                    }
+                }
+
+                fun clearCalculatedRoute() {
+                    mapLibreMap?.let { map -> routePolyline?.let { runCatching { map.removeAnnotation(it) } } }
+                    routePolyline = null
+                    calculatedRoute = null
+                    routeCoordinates = emptyList()
+                    navigationProgress = null
+                    navigationManeuver = null
+                    transportSearchJob?.cancel()
+                    transportSearchJob = null
+                    transportLoading = false
+                    transportSearchResult = null
+                    transportSearchError = null
+                    navigationStarted = false
+                }
+
+                fun cancelNavigation() {
+                    clearCalculatedRoute()
+                    navigationDestination = null
+                    intercityFinalDestination = null
+                    intercityArrivalStation = null
+                    intercityArrivalAirport = null
+                    intercityStage = "none"
+                    intercityItineraryLines = emptyList()
+                    intercityItineraryMessage = null
+                    flightItineraryLines = emptyList()
+                    flightItineraryMessage = null
+                    navigationError = null
+                    routeLoading = false
+                }
+
+                fun calculateRouteTo(destination: HorusNavigationDestination) {
+                    val map = mapLibreMap ?: return
+                    val origin = bestKnownLocation(map)
+                    if (origin == null) {
+                        navigationError = "اسمح للتطبيق بالوصول إلى موقعك الحالي لتحديد نقطة البداية."
+                        requestOrLocate()
+                        return
+                    }
+                    routeLoading = true
+                    navigationError = null
+                    accountScope.launch {
+                        try {
+                            val result = HorusMapSearchApi.route(
+                                origin.latitude,
+                                origin.longitude,
+                                destination.latitude,
+                                destination.longitude,
+                                selectedTravelMode
+                            )
+                            val coordinates = org.json.JSONObject(result.geometryGeoJson)
+                                .getJSONArray("coordinates")
+                            val points = buildList {
+                                for (index in 0 until coordinates.length()) {
+                                    val pair = coordinates.optJSONArray(index) ?: continue
+                                    if (pair.length() < 2) continue
+                                    add(LatLng(pair.getDouble(1), pair.getDouble(0)))
+                                }
+                            }
+                            if (points.size < 2) throw IllegalStateException("لم يصل مسار صالح من خدمة الملاحة.")
+                            routePolyline?.let { runCatching { map.removeAnnotation(it) } }
+                            routePolyline = map.addPolyline(
+                                PolylineOptions()
+                                    .addAll(points)
+                                    .color(android.graphics.Color.rgb(25, 118, 210))
+                                    .width(6f)
+                            )
+                            routeCoordinates = points
+                            calculatedRoute = result
+                            bestKnownLocation(map)?.let { location ->
+                                val progress = calculateRouteProgress(points, location, result)
+                                navigationProgress = progress
+                                navigationManeuver = progress?.let { selectNavigationManeuver(result, it) }
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            navigationError = error.message ?: "تعذر حساب الطريق. حاول مرة أخرى."
+                            calculatedRoute = null
+                        } finally {
+                            routeLoading = false
+                        }
+                    }
+                }
+
+                fun routeToOriginStation(station: HorusTransitStation) {
+                    val finalDestination = navigationDestination ?: return
+                    val transitResult = transportSearchResult
+                    val timetableAvailable = transitResult?.available == true && transitResult.options.isNotEmpty()
+                    val arrivalStation = if (timetableAvailable) {
+                        transitResult?.destinationStations?.firstOrNull()
+                    } else null
+
+                    // A mapped station is still a valid navigation destination even when
+                    // the open timetable provider has no schedule for this route/date.
+                    intercityItineraryLines = if (arrivalStation != null) transitResult?.options.orEmpty() else emptyList()
+                    intercityItineraryMessage = if (arrivalStation != null) transitResult?.message else
+                        "تم العثور على المحطة. لا تتوفر حاليًا بيانات جدول قطار مؤكدة لهذا المسار؛ يمكنك التوجيه إلى المحطة مباشرة."
+                    intercityFinalDestination = if (arrivalStation != null) finalDestination else null
+                    intercityArrivalStation = arrivalStation
+                    intercityStage = if (arrivalStation != null) "to_origin_station" else "none"
+                    navigationStarted = false
+                    clearCalculatedRoute()
+                    selectedTravelMode = "driving"
+                    val stationDestination = HorusNavigationDestination(
+                        name = station.name,
+                        address = "محطة انطلاق القطار • تبعد ${station.distanceMeters} متر عن نقطة البداية",
+                        latitude = station.latitude,
+                        longitude = station.longitude
+                    )
+                    navigationDestination = stationDestination
+                    navigationError = null
+                    mapLibreMap?.animateCamera(
+                        CameraUpdateFactory.newLatLngZoom(LatLng(station.latitude, station.longitude), 14.5),
+                        700
+                    )
+                    // Tapping "اذهب" now calculates and draws the road route immediately.
+                    calculateRouteTo(stationDestination)
+                }
+
+                fun routeToOriginAirport(airport: HorusAirport) {
+                    val finalDestination = navigationDestination ?: return
+                    val flightResult = transportSearchResult
+                    if (flightResult?.available != true || flightResult.options.isEmpty()) {
+                        navigationError = flightResult?.message ?: "ابحث عن عرض طيران متاح قبل التوجه إلى المطار."
+                        return
+                    }
+                    val arrivalAirport = flightResult.destinationAirport
+                    if (arrivalAirport == null) {
+                        navigationError = "لم يتم تحديد مطار وصول صالح لهذا العرض."
+                        return
+                    }
+                    flightItineraryLines = flightResult.options
+                    flightItineraryMessage = flightResult.message
+                    intercityFinalDestination = finalDestination
+                    intercityArrivalAirport = arrivalAirport
+                    intercityStage = "to_origin_airport"
+                    navigationStarted = false
+                    clearCalculatedRoute()
+                    selectedTravelMode = "driving"
+                    navigationDestination = HorusNavigationDestination(
+                        name = airport.name,
+                        address = "مطار المغادرة (${airport.iataCode}) • يبعد ${airport.distanceMeters} متر عن نقطة البداية",
+                        latitude = airport.latitude,
+                        longitude = airport.longitude
+                    )
+                    navigationError = null
+                    mapLibreMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(airport.latitude, airport.longitude), 13.5), 700)
+                }
+
+                fun confirmReachedOriginAirport() {
+                    val arrival = intercityArrivalAirport ?: return
+                    navigationStarted = false
+                    clearCalculatedRoute()
+                    intercityStage = "waiting_flight"
+                    selectedTravelMode = "flight"
+                    navigationDestination = HorusNavigationDestination(
+                        name = arrival.name,
+                        address = "مطار الوصول (${arrival.iataCode}) • اتبع بيانات الرحلة المحددة للوصول إليه",
+                        latitude = arrival.latitude,
+                        longitude = arrival.longitude
+                    )
+                    navigationError = null
+                    mapLibreMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(arrival.latitude, arrival.longitude), 13.5), 700)
+                }
+
+                fun continueToFinalDestination() {
+                    val finalDestination = intercityFinalDestination ?: return
+                    navigationStarted = false
+                    intercityStage = "none"
+                    intercityFinalDestination = null
+                    intercityArrivalStation = null
+                    intercityArrivalAirport = null
+                    intercityItineraryLines = emptyList()
+                    intercityItineraryMessage = null
+                    flightItineraryLines = emptyList()
+                    flightItineraryMessage = null
+                    navigationDestination = finalDestination
+                    selectedTravelMode = "driving"
+                    transportSearchJob?.cancel()
+                    transportSearchResult = null
+                    transportSearchError = null
+                    transportLoading = false
+                    clearCalculatedRoute()
+                    navigationError = null
+                }
+
+                fun confirmReachedArrivalAirport() { continueToFinalDestination() }
+                fun confirmReachedOriginStation() {
+                    val arrival = intercityArrivalStation ?: return
+                    navigationStarted = false
+                    clearCalculatedRoute()
+                    intercityStage = "waiting_train"
+                    selectedTravelMode = "transit"
+                    navigationDestination = HorusNavigationDestination(
+                        name = arrival.name,
+                        address = "محطة وصول القطار • اتبع بيانات الرحلة المحددة للوصول إليها",
+                        latitude = arrival.latitude,
+                        longitude = arrival.longitude
+                    )
+                    navigationError = null
+                    mapLibreMap?.animateCamera(
+                        CameraUpdateFactory.newLatLngZoom(LatLng(arrival.latitude, arrival.longitude), 13.5),
+                        700
+                    )
+                }
+
+                fun confirmReachedArrivalStation() { continueToFinalDestination() }
+
+                fun selectGeographyResult(result: HorusGeoSearchResult) {
+                    intercityFinalDestination = null
+                    intercityArrivalStation = null
+                    intercityArrivalAirport = null
+                    intercityStage = "none"
+                    intercityItineraryLines = emptyList()
+                    intercityItineraryMessage = null
+                    flightItineraryLines = emptyList()
+                    flightItineraryMessage = null
+                    clearCalculatedRoute()
+                    navigationDestination = HorusNavigationDestination(
+                        name = result.name,
+                        address = result.displayName,
+                        latitude = result.latitude,
+                        longitude = result.longitude
+                    )
+                    mapLibreMap?.let { focusSearchResult(it, result) }
+                    searchExpanded = false
+                    searchError = null
+                    navigationError = null
+                }
+
+                fun selectNearbyResult(result: HorusNearbyPlace) {
+                    intercityFinalDestination = null
+                    intercityArrivalStation = null
+                    intercityArrivalAirport = null
+                    intercityStage = "none"
+                    intercityItineraryLines = emptyList()
+                    intercityItineraryMessage = null
+                    flightItineraryLines = emptyList()
+                    flightItineraryMessage = null
+                    clearCalculatedRoute()
+                    transportSearchJob?.cancel()
+                    transportSearchResult = null
+                    transportSearchError = null
+                    transportLoading = false
+                    selectedTravelMode = "driving"
+                    navigationDestination = HorusNavigationDestination(
+                        name = result.name,
+                        address = listOf(result.address, result.region, result.country).filter { it.isNotBlank() }.distinct().joinToString("، "),
+                        latitude = result.latitude,
+                        longitude = result.longitude,
+                        isLocalPlace = true
+                    )
+                    mapLibreMap?.let { map ->
+                        map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(result.latitude, result.longitude), 16.5), 900)
+                        showSearchMarker(map, result.latitude, result.longitude, result.name)
+                    }
+                    searchExpanded = false
+                    searchError = null
+                    navigationError = null
+                }
+
+                fun calculateSelectedRoute() {
+                    val destination = navigationDestination ?: return
+                    calculateRouteTo(destination)
+                }
+
+                fun searchSelectedTransport(mode: String = selectedTravelMode, dateOverride: String = travelDate) {
+                    val destination = navigationDestination ?: return
+                    val map = mapLibreMap ?: return
+                    val origin = bestKnownLocation(map)
+                    if (origin == null) {
+                        transportSearchError = "اسمح للتطبيق بالوصول إلى موقعك لتحديد أقرب محطة أو مطار."
+                        requestOrLocate()
+                        return
+                    }
+                    transportSearchJob?.cancel()
+                    transportLoading = true
+                    transportSearchError = null
+                    transportSearchResult = null
+                    transportSearchJob = accountScope.launch {
+                        try {
+                            val result = if (mode == "transit") {
+                                val departureCalendar = Calendar.getInstance()
+                                val dateParts = dateOverride.split("-")
+                                val timeParts = travelTime.split(":")
+                                if (dateParts.size == 3 && timeParts.size == 2) {
+                                    departureCalendar.set(
+                                        dateParts[0].toInt(), dateParts[1].toInt() - 1, dateParts[2].toInt(),
+                                        timeParts[0].toInt(), timeParts[1].toInt(), 0
+                                    )
+                                    departureCalendar.set(Calendar.MILLISECOND, 0)
+                                }
+                                val departureTime = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+                                    .format(departureCalendar.time)
+                                HorusMapSearchApi.searchTransit(
+                                    origin.latitude, origin.longitude,
+                                    destination.latitude, destination.longitude,
+                                    departureTime
+                                )
+                            } else {
+                                HorusMapSearchApi.searchFlights(
+                                    origin.latitude, origin.longitude,
+                                    destination.latitude, destination.longitude,
+                                    dateOverride
+                                )
+                            }
+                            if (selectedTravelMode == mode) {
+                                transportSearchResult = result
+                                if (mode == "transit" && !result.geometryGeoJson.isNullOrBlank()) {
+                                    val coordinates = org.json.JSONObject(result.geometryGeoJson).optJSONArray("coordinates")
+                                    val points = buildList {
+                                        for (index in 0 until (coordinates?.length() ?: 0)) {
+                                            val pair = coordinates?.optJSONArray(index) ?: continue
+                                            if (pair.length() >= 2) add(LatLng(pair.getDouble(1), pair.getDouble(0)))
+                                        }
+                                    }
+                                    if (points.size >= 2) {
+                                        routePolyline?.let { runCatching { map.removeAnnotation(it) } }
+                                        routePolyline = map.addPolyline(
+                                            PolylineOptions().addAll(points)
+                                                .color(android.graphics.Color.rgb(111, 66, 193))
+                                                .width(6f)
+                                        )
+                                        routeCoordinates = points
+                                    }
+                                }
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            if (selectedTravelMode == mode) transportSearchError = error.message ?: "تعذر البحث عن وسائل النقل."
+                        } finally {
+                            if (selectedTravelMode == mode) transportLoading = false
+                        }
+                    }
+                }
+
+                fun chooseTravelDate() {
+                    val calendar = Calendar.getInstance()
+                    val parts = travelDate.split("-")
+                    if (parts.size == 3) {
+                        runCatching {
+                            calendar.set(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt())
+                        }
+                    }
+                    DatePickerDialog(
+                        this@MainActivity,
+                        { _, year, month, day ->
+                            val selectedDate = String.format(Locale.US, "%04d-%02d-%02d", year, month + 1, day)
+                            travelDate = selectedDate
+                            when (selectedTravelMode) {
+                                "flight" -> searchSelectedTransport("flight", selectedDate)
+                                "transit" -> {
+                                    val timeParts = travelTime.split(":")
+                                    val hour = timeParts.getOrNull(0)?.toIntOrNull() ?: 9
+                                    val minute = timeParts.getOrNull(1)?.toIntOrNull() ?: 0
+                                    android.app.TimePickerDialog(
+                                        this@MainActivity,
+                                        { _, selectedHour, selectedMinute ->
+                                            travelTime = String.format(Locale.US, "%02d:%02d", selectedHour, selectedMinute)
+                                            searchSelectedTransport("transit", selectedDate)
+                                        },
+                                        hour,
+                                        minute,
+                                        true
+                                    ).show()
+                                }
+                            }
+                        },
+                        calendar.get(Calendar.YEAR),
+                        calendar.get(Calendar.MONTH),
+                        calendar.get(Calendar.DAY_OF_MONTH)
+                    ).apply {
+                        datePicker.minDate = System.currentTimeMillis()
+                    }.show()
+                }
+
+                fun beginNavigation() {
+                    if (calculatedRoute == null) return
+                    navigationStarted = true
+                    val activeRoute = calculatedRoute
+                    val activeLocation = mapLibreMap?.let { bestKnownLocation(it) }
+                    if (activeRoute != null && activeLocation != null) {
+                        val progress = calculateRouteProgress(routeCoordinates, activeLocation, activeRoute)
+                        navigationProgress = progress
+                        navigationManeuver = progress?.let { selectNavigationManeuver(activeRoute, it) }
+                    }
+                    mapLibreMap?.let { map ->
+                        runCatching {
+                            if (map.locationComponent.isLocationComponentActivated) {
+                                map.locationComponent.cameraMode = CameraMode.TRACKING
+                            }
+                        }
+                    }
+                }
+                LaunchedEffect(navigationStarted, calculatedRoute, routeCoordinates) {
+                    if (!navigationStarted || calculatedRoute == null || routeCoordinates.size < 2) {
+                        navigationProgress = null
+                        return@LaunchedEffect
+                    }
+                    val fine = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    val coarse = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    if (!fine && !coarse) {
+                        navigationError = "انقطع إذن الموقع؛ اسمح بالوصول للموقع لمتابعة تحديث المسافة المتبقية."
+                        return@LaunchedEffect
+                    }
+                    val manager = getSystemService(LOCATION_SERVICE) as LocationManager
+                    val listener = object : LocationListener {
+                        override fun onLocationChanged(location: Location) {
+                            val activeRoute = calculatedRoute ?: return
+                            val progress = calculateRouteProgress(routeCoordinates, location, activeRoute)
+                            navigationProgress = progress
+                            navigationManeuver = progress?.let { selectNavigationManeuver(activeRoute, it) }
+                        }
+                    }
+                    val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+                        .filter { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+                    try {
+                        bestKnownLocation(mapLibreMap ?: return@LaunchedEffect)?.let { location ->
+                            val progress = calculateRouteProgress(routeCoordinates, location, calculatedRoute!!)
+                            navigationProgress = progress
+                            navigationManeuver = progress?.let { selectNavigationManeuver(calculatedRoute!!, it) }
+                        }
+                        providers.forEach { provider ->
+                            manager.requestLocationUpdates(provider, 1000L, 3f, listener, Looper.getMainLooper())
+                        }
+                    } catch (security: SecurityException) {
+                        navigationError = "يلزم السماح بإذن الموقع لتحديث الملاحة."
+                    } catch (error: Exception) {
+                        android.util.Log.w("HorusMaps", "Navigation location updates unavailable", error)
+                    }
+                    try {
+                        kotlinx.coroutines.awaitCancellation()
+                    } finally {
+                        runCatching { manager.removeUpdates(listener) }
+                    }
+                }
+
                 LaunchedEffect(Unit) {
                     HorusRemoteConfig.refresh(this@MainActivity) { updated ->
                         remoteConfig = updated
@@ -772,6 +1657,11 @@ class MainActivity : ComponentActivity() {
                             }
                             map.setStyle(styleBuilder) { style ->
                                 runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language) }
+                                installPlaceFeatureClickListener(map) { destination ->
+                                    clearCalculatedRoute()
+                                    navigationDestination = destination
+                                    navigationError = null
+                                }
                                 map.animateCamera(
                                 CameraUpdateFactory.newCameraPosition(
                                     org.maplibre.android.camera.CameraPosition.Builder()
@@ -805,9 +1695,16 @@ class MainActivity : ComponentActivity() {
                                     mapInitializationRequested.value = true
                                     view.getMapAsync { map ->
                                         mapLibreMap = map
-                                        // Keep the map data/source credits visible, but replace the MapLibre brand mark
-                                        // with HorusMaps branding in the app UI.
-                                        map.uiSettings.setLogoEnabled(false)
+                                         // Replace the MapLibre logo and native attribution info button with
+                                         // a plain HorusMaps wordmark and a persistent, readable source credit.
+                                         map.uiSettings.setLogoEnabled(false)
+                                          map.uiSettings.setAttributionEnabled(false)
+                                          // Keep the compass clear of the profile control in the top-right.
+                                          // Place it in the upper-left corner with a comfortable inset.
+                                          map.uiSettings.setCompassGravity(android.view.Gravity.TOP or android.view.Gravity.LEFT)
+                                          val compassInset = (16 * resources.displayMetrics.density).toInt()
+                                          val compassTop = (112 * resources.displayMetrics.density).toInt()
+                                          map.uiSettings.setCompassMargins(compassInset, compassTop, 0, 0)
                                         val mapViewportWidthPx = resources.displayMetrics.widthPixels.toDouble()
                                         val singleWorldMinZoom = (
                                             kotlin.math.ln(mapViewportWidthPx / 512.0) / kotlin.math.ln(2.0) + 0.12
@@ -823,6 +1720,11 @@ class MainActivity : ComponentActivity() {
                                                 Style.Builder().fromUri(remoteConfig.styleUrl)
                                             }
                                             map.setStyle(styleBuilder) { style ->
+                                            installPlaceFeatureClickListener(map) { destination ->
+                                                clearCalculatedRoute()
+                                                navigationDestination = destination
+                                                navigationError = null
+                                            }
                                             // The old repository used this same Liberty vector
                                             // basemap, with localized labels and 3D buildings.
                                             runCatching { installMapAppearance(this@MainActivity, style, remoteConfig.language) }
@@ -851,25 +1753,208 @@ class MainActivity : ComponentActivity() {
                             }
                         )
 
-                        // Subtle HorusMaps signature. Native map/source attribution remains enabled.
-                        Surface(
+                        AnimatedVisibility(
+                            visible = navigationDestination != null && !navigationStarted,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .navigationBarsPadding()
+                                .padding(bottom = 18.dp),
+                            enter = slideInVertically(
+                                animationSpec = tween(420, easing = FastOutSlowInEasing),
+                                initialOffsetY = { it }
+                            ) + fadeIn(tween(300)),
+                            exit = slideOutVertically(
+                                animationSpec = tween(320, easing = FastOutSlowInEasing),
+                                targetOffsetY = { it }
+                            ) + fadeOut(tween(220))
+                        ) {
+                            navigationDestination?.let { destination ->
+                                HorusNavigationPanel(
+                                    destination = destination,
+                                    selectedMode = selectedTravelMode,
+                                    route = calculatedRoute,
+                                    calculating = routeLoading,
+                                    navigating = navigationStarted,
+                                    error = navigationError,
+                                    onModeSelected = { mode ->
+                                        if (selectedTravelMode != mode) {
+                                            selectedTravelMode = mode
+                                            clearCalculatedRoute()
+                                            navigationError = null
+                                            if (mode == "transit" || mode == "flight") searchSelectedTransport(mode)
+                                        }
+                                    },
+                                    travelDate = travelDate,
+                                    travelTime = travelTime,
+                                    transportLoading = transportLoading,
+                                    transportMessage = transportSearchError ?: transportSearchResult?.message,
+                                    transportOptions = transportSearchResult?.options.orEmpty(),
+                                    priceMessage = transportSearchResult?.priceMessage,
+                                    priceOffers = transportSearchResult?.priceOffers.orEmpty(),
+                                    originStations = transportSearchResult?.originStations.orEmpty(),
+                                    destinationStations = transportSearchResult?.destinationStations.orEmpty(),
+                                    onRouteToOriginStation = { station -> routeToOriginStation(station) },
+                                    originAirport = transportSearchResult?.originAirport,
+                                    destinationAirport = transportSearchResult?.destinationAirport,
+                                    onRouteToOriginAirport = { airport -> routeToOriginAirport(airport) },
+                                    waitingForTrainArrival = intercityStage == "waiting_train",
+                                    waitingForFlightArrival = intercityStage == "waiting_flight",
+                                    intercityItineraryLines = intercityItineraryLines,
+                                    intercityItineraryMessage = intercityItineraryMessage,
+                                    flightItineraryLines = flightItineraryLines,
+                                    flightItineraryMessage = flightItineraryMessage,
+                                    onConfirmTrainArrival = { confirmReachedArrivalStation() },
+                                    onConfirmFlightArrival = { confirmReachedArrivalAirport() },
+                                    onGetBookingLinks = { offer ->
+                                        if (bookingLoadingId == null && offer.ignavId.isNotBlank()) {
+                                            bookingLoadingId = offer.ignavId
+                                            accountScope.launch {
+                                                try {
+                                                    val bookingUrl = HorusMapSearchApi.bookingLink(offer.ignavId)
+                                                    if (!bookingUrl.isNullOrBlank()) {
+                                                        startActivity(
+                                                            android.content.Intent(
+                                                                android.content.Intent.ACTION_VIEW,
+                                                                android.net.Uri.parse(bookingUrl)
+                                                            )
+                                                        )
+                                                        transportSearchError = null
+                                                    } else {
+                                                        transportSearchError = "لم يوفر مزود الحجز رابطًا صالحًا لهذا العرض حاليًا."
+                                                    }
+                                                } catch (error: Exception) {
+                                                    transportSearchError = error.message ?: "تعذر جلب روابط الحجز."
+                                                } finally {
+                                                    bookingLoadingId = null
+                                                }
+                                            }
+                                        }
+                                    },
+                                    bookingLoadingId = bookingLoadingId,
+                                    onSearchTransport = { searchSelectedTransport() },
+                                    onPickDate = { chooseTravelDate() },
+                                    allowIntercityModes = navigationDestination?.isLocalPlace != true && intercityStage == "none",
+                                    onCalculate = { calculateSelectedRoute() },
+                                    onStart = { beginNavigation() },
+                                    onCancel = { cancelNavigation() }
+                                )
+                            }
+                        }
+
+                        HorusMapSearchPanel(
+                            query = searchQuery,
+                            onQueryChange = { value ->
+                                searchQuery = value
+                                searchHasRun = false
+                                searchError = null
+                            },
+                            expanded = searchExpanded,
+                            onExpandedChange = { searchExpanded = it },
+                            loading = searchLoading,
+                            hasSearched = searchHasRun,
+                            error = searchError,
+                            selectedCategory = selectedSearchCategory,
+                            geographyResults = geographySearchResults,
+                            nearbyResults = nearbySearchResults,
+                            onCategorySelected = { category ->
+                                selectedSearchCategory = category
+                                searchQuery = ""
+                                searchHasRun = false
+                                searchError = null
+                                geographySearchResults = emptyList()
+                                nearbySearchResults = emptyList()
+                                searchExpanded = true
+                            },
+                            onSearch = { runMapSearch() },
+                            onSelectGeography = { selectGeographyResult(it) },
+                            onSelectPlace = { selectNearbyResult(it) },
+                            onClose = {
+                                searchExpanded = false
+                                searchQuery = ""
+                                searchHasRun = false
+                                searchError = null
+                                selectedSearchCategory = null
+                                geographySearchResults = emptyList()
+                                nearbySearchResults = emptyList()
+                            },
+                            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                                .padding(start = 12.dp, end = 78.dp, top = 8.dp)
+                        )
+
+                        if (navigationStarted && navigationProgress != null) {
+                            HorusNavigationActiveHud(
+                                remainingMeters = navigationProgress!!.remainingMeters,
+                                remainingSeconds = navigationProgress!!.remainingSeconds,
+                                maneuver = navigationManeuver?.current,
+                                distanceToManeuverMeters = navigationManeuver?.distanceToCurrentMeters,
+                                onStop = {
+                                    when (intercityStage) {
+                                        "to_origin_station" -> confirmReachedOriginStation()
+                                        "to_origin_airport" -> confirmReachedOriginAirport()
+                                        else -> cancelNavigation()
+                                    }
+                                },
+                                arrivedActionLabel = when (intercityStage) {
+                                    "to_origin_station" -> "وصلت للمحطة"
+                                    "to_origin_airport" -> "وصلت للمطار"
+                                    else -> "إنهاء"
+                                },
+                                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                                    .padding(top = 74.dp)
+                            )
+                        }
+
+                        // MapLibre-style plain wordmark in the lower-right corner (no badge or info icon).
+                        Text(
+                            text = "HorusMaps",
                             modifier = Modifier
                                 .align(androidx.compose.ui.AbsoluteAlignment.BottomRight)
                                 .navigationBarsPadding()
-                                .padding(
-                                    end = 18.dp,
-                                    bottom = if (remoteConfig.currentLocation) 166.dp else 96.dp
-                                ),
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color.White.copy(alpha = 0.96f),
-                            shadowElevation = 5.dp
+                                .padding(end = 8.dp, bottom = 2.dp),
+                            color = Color(0xFF263238),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        // Required source attribution stays discreet in the opposite corner
+                        // from the HorusMaps wordmark, with both source names remaining tappable.
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .navigationBarsPadding()
+                                .padding(start = 8.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "HorusMaps",
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                                color = Color(0xFF172033),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
+                                text = "© OpenStreetMap",
+                                modifier = Modifier.clickable {
+                                    startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://openstreetmap.org/copyright")
+                                        )
+                                    )
+                                },
+                                color = Color(0xFF667085).copy(alpha = 0.72f),
+                                fontSize = 7.sp,
+                                fontWeight = FontWeight.Normal,
+                                maxLines = 1
+                            )
+                            Text(" · ", color = Color(0xFF667085).copy(alpha = 0.72f), fontSize = 7.sp)
+                            Text(
+                                text = "OpenMapTiles",
+                                modifier = Modifier.clickable {
+                                    startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://openmaptiles.org/")
+                                        )
+                                    )
+                                },
+                                color = Color(0xFF667085).copy(alpha = 0.72f),
+                                fontSize = 7.sp,
+                                fontWeight = FontWeight.Normal,
+                                maxLines = 1
                             )
                         }
 

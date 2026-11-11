@@ -36,6 +36,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -119,6 +120,8 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onLoginRequested: () -> Unit, onAc
     var submitting by remember { mutableStateOf(false) }
     var loadingMessage by remember { mutableStateOf("جاري توجيهك إلى صفحة إنشاء الحساب...") }
     var errorMessage by remember { mutableStateOf("") }
+    var acceptedPolicies by remember { mutableStateOf(false) }
+    var legalDocument by remember { mutableStateOf<HorusLegalDocument?>(null) }
 
     val strength = passwordLevel(password)
     val usernameNormalized = username.trim().lowercase(Locale.ROOT)
@@ -228,10 +231,53 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onLoginRequested: () -> Unit, onAc
                                     color = if (password == confirmPassword) Color(0xFF16845B) else Color(0xFFD34C55), fontSize = 12.sp
                                 )
                             }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = acceptedPolicies,
+                                    onCheckedChange = {
+                                        acceptedPolicies = it
+                                        if (it && errorMessage.contains("الموافقة")) errorMessage = ""
+                                    }
+                                )
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("أوافق على ", color = Color(0xFF52647A), fontSize = 11.sp)
+                                        Text(
+                                            "سياسة الخصوصية",
+                                            modifier = Modifier.clickable { legalDocument = HorusLegalDocument.PRIVACY },
+                                            color = Color(0xFF087FE5),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("و", color = Color(0xFF52647A), fontSize = 11.sp)
+                                        Text(
+                                            "شروط الاستخدام",
+                                            modifier = Modifier.clickable { legalDocument = HorusLegalDocument.TERMS },
+                                            color = Color(0xFF087FE5),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                            if (!acceptedPolicies) {
+                                Text(
+                                    "الموافقة على السياستين مطلوبة للمتابعة وإنشاء الحساب.",
+                                    color = Color(0xFF8994A3),
+                                    fontSize = 10.sp,
+                                    modifier = Modifier.padding(start = 12.dp)
+                                )
+                            }
                             if (errorMessage.isNotBlank()) AuthError(errorMessage)
                             Button(
                                 onClick = {
                                     errorMessage = when {
+                                        !acceptedPolicies -> "يجب الموافقة على سياسة الخصوصية وشروط الاستخدام للمتابعة."
                                         firstName.trim().length < 2 -> "اكتب الاسم الأول بشكل صحيح."
                                         lastName.trim().length < 2 -> "اكتب اسم العائلة بشكل صحيح."
                                         password.length > 128 -> "كلمة المرور يجب ألا تتجاوز 128 حرفًا."
@@ -315,7 +361,14 @@ fun HorusRegistrationFlow(onBack: () -> Unit, onLoginRequested: () -> Unit, onAc
             Spacer(Modifier.height(14.dp))
         }
 
-        if (showCountryPicker) {
+        if (legalDocument != null) {
+            HorusLegalDocumentPage(
+                document = legalDocument!!,
+                onBack = { legalDocument = null }
+            )
+        }
+
+        if (showCountryPicker && legalDocument == null) {
             AlertDialog(
                 onDismissRequest = { showCountryPicker = false; countryQuery = "" },
                 title = { Text("اختر الدولة ومفتاح الاتصال", fontWeight = FontWeight.Bold) },

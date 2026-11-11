@@ -10,3 +10,31 @@ id = "7be96ca0a9c3487fa6b0702a964caf7c"
 binding = "HORUS_USERS"
 database_name = "db1"
 database_id = "b346085d-cde1-435d-87c5-0bfee2a20898"
+
+# Isolated resources used only by Workers Preview deployments.
+[[previews.kv_namespaces]]
+binding = "HORUS_MAPS_CONFIG"
+id = "1d944d08456c43eb998b8ca3f8e5fb9e"
+
+[[previews.d1_databases]]
+binding = "HORUS_USERS"
+database_id = "183163d2-6c15-41ad-99b2-17f91406682c"
+database_name = "horus_maps_preview"
+
+# Full observability for Preview only; Production settings remain unchanged.
+[previews.observability]
+enabled = true
+
+  [previews.observability.logs]
+  enabled = true
+  head_sampling_rate = 1
+  invocation_logs = true
+  persist = true
+
+  [previews.observability.traces]
+  enabled = true
+  head_sampling_rate = 1
+  persist = true
+
+  [previews.observability.issues]
+  enabled = true

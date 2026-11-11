@@ -18,6 +18,24 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    buildTypes {
+        debug {
+            buildConfigField(
+                "String",
+                "HORUS_API_BASE_URL",
+                "\"https://feature-advanced-search-navigation-horus-maps-final.horus-egypt-company.workers.dev\""
+            )
+        }
+        release {
+            buildConfigField(
+                "String",
+                "HORUS_API_BASE_URL",
+                "\"https://horus-maps-final.horus-egypt-company.workers.dev\""
+            )
+        }
     }
 
     compileOptions {
