@@ -1831,6 +1831,32 @@ export default {
       }
     }
 
+    if (url.pathname === "/v1/search/airports" && request.method === "POST") {
+      try {
+        const body = await readJson(request);
+        const originLat = validCoordinate(body.originLatitude, -90, 90);
+        const originLon = validCoordinate(body.originLongitude, -180, 180);
+        const destinationLat = validCoordinate(body.destinationLatitude, -90, 90);
+        const destinationLon = validCoordinate(body.destinationLongitude, -180, 180);
+        if ([originLat, originLon, destinationLat, destinationLon].some(value => value === null)) {
+          return json({ ok: false, error: "إحداثيات نقطة البداية أو الوجهة غير صالحة." }, 400);
+        }
+        const [originAirports, destinationAirports] = await Promise.all([
+          findNearbyOpenAirports(originLat, originLon, env),
+          findNearbyOpenAirports(destinationLat, destinationLon, env)
+        ]);
+        return json({
+          ok: true,
+          provider: "OpenStreetMap / OurAirports open data",
+          originAirports,
+          destinationAirports
+        });
+      } catch (error) {
+        console.error("[HorusAirports] Discovery failed", String(error?.message || error).slice(0, 160));
+        return json({ ok: false, error: "تعذر الوصول إلى مصادر بيانات المطارات المفتوحة حاليًا." }, 503);
+      }
+    }
+
     if (url.pathname === "/v1/search/flights" && request.method === "POST") {
       try {
         const body = await readJson(request);
